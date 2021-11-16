@@ -56,6 +56,7 @@ public:
     {
         return false;
     }
+
 private:
     std::ostream &cout_stream;
     std::ostream& cerr_stream;
