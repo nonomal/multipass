@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2019-2020 Canonical, Ltd.
+ * Copyright (C) 2019-2021 Canonical, Ltd.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -55,6 +55,10 @@ public:
     bool cout_is_live() const override
     {
         return false;
+    }
+
+    void set_cin_echo(const bool enable) override
+    {
     }
 
 private:
