@@ -1,4 +1,4 @@
-# Copyright © 2017-2022 Canonical Ltd.
+# Copyright (C) Canonical, Ltd.
 #
 # This program is free software: you can redistribute it and/or modify
 # it under the terms of the GNU General Public License version 3 as
@@ -20,6 +20,7 @@ add_library(simplestreams STATIC
 
 target_link_libraries(simplestreams
   network
+  settings
   utils
-  Qt5::Core
-  Qt5::Network)
+  Qt6::Core
+  Qt6::Network)

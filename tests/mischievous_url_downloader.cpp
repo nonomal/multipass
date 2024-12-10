@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2019-2022 Canonical, Ltd.
+ * Copyright (C) Canonical, Ltd.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -33,6 +33,11 @@ void mpt::MischievousURLDownloader::download_to(const QUrl& url, const QString& 
 QByteArray mpt::MischievousURLDownloader::download(const QUrl& url)
 {
     return URLDownloader::download(choose_url(url));
+}
+
+QByteArray mpt::MischievousURLDownloader::download(const QUrl& url, const bool is_force_update_from_network)
+{
+    return URLDownloader::download(choose_url(url), is_force_update_from_network);
 }
 
 QDateTime mpt::MischievousURLDownloader::last_modified(const QUrl& url)

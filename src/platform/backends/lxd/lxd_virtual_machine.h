@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2019-2022 Canonical, Ltd.
+ * Copyright (C) Canonical, Ltd.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -18,7 +18,6 @@
 #ifndef MULTIPASS_LXD_VIRTUAL_MACHINE_H
 #define MULTIPASS_LXD_VIRTUAL_MACHINE_H
 
-#include <QJsonObject>
 #include <QString>
 #include <QUrl>
 
@@ -30,15 +29,21 @@ class NetworkAccessManager;
 class VirtualMachineDescription;
 class VMStatusMonitor;
 
-class LXDVirtualMachine final : public BaseVirtualMachine
+class LXDVirtualMachine : public BaseVirtualMachine
 {
 public:
-    LXDVirtualMachine(const VirtualMachineDescription& desc, VMStatusMonitor& monitor, NetworkAccessManager* manager,
-                      const QUrl& base_url, const QString& bridge_name, const QString& storage_pool);
+    LXDVirtualMachine(const VirtualMachineDescription& desc,
+                      VMStatusMonitor& monitor,
+                      NetworkAccessManager* manager,
+                      const QUrl& base_url,
+                      const QString& bridge_name,
+                      const QString& storage_pool,
+                      const SSHKeyProvider& key_provider,
+                      const Path& instance_dir);
     ~LXDVirtualMachine() override;
-    void stop() override;
+
     void start() override;
-    void shutdown() override;
+    void shutdown(ShutdownPolicy shutdown_policy = ShutdownPolicy::Powerdown) override;
     void suspend() override;
     State current_state() override;
     int ssh_port() override;
@@ -48,24 +53,40 @@ public:
     std::string ipv6() override;
     void ensure_vm_is_running() override;
     void ensure_vm_is_running(const std::chrono::milliseconds& timeout);
-    void wait_until_ssh_up(std::chrono::milliseconds timeout) override;
     void update_state() override;
+    void update_cpus(int num_cores) override;
+    void resize_memory(const MemorySize& new_size) override;
+    void resize_disk(const MemorySize& new_size) override;
+    void add_network_interface(int index,
+                               const std::string& default_mac_addr,
+                               const NetworkInterface& extra_interface) override;
+    std::unique_ptr<MountHandler> make_native_mount_handler(const std::string& target, const VMMount& mount) override;
 
 private:
+    void add_extra_interface_to_instance_cloud_init(const std::string& default_mac_addr,
+                                                    const NetworkInterface& extra_interface) const override;
+    void apply_extra_interfaces_and_instance_id_to_cloud_init(const std::string& default_mac_addr,
+                                                              const std::vector<NetworkInterface>& extra_interfaces,
+                                                              const std::string& new_instance_id) const override
+    {
+        throw NotImplementedOnThisBackendException("apply_extra_interfaces_and_instance_id_to_cloud_init");
+    }
+
     const QString name;
     const std::string username;
-    multipass::optional<int> port;
+    std::optional<int> port;
     VMStatusMonitor* monitor;
     bool update_shutdown_status{true};
     NetworkAccessManager* manager;
     const QUrl base_url;
     const QString bridge_name;
     const QString mac_addr;
+    const QString storage_pool;
 
-    const QUrl url();
+    const QUrl url() const;
     const QUrl state_url();
     const QUrl network_leases_url();
-    void request_state(const QString& new_state);
+    void request_state(const QString& new_state, const QJsonObject& args = {});
 };
 } // namespace multipass
 #endif // MULTIPASS_LXD_VIRTUAL_MACHINE_H

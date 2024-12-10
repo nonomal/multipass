@@ -1,4 +1,4 @@
-# Copyright © 2021-2022 Canonical Ltd.
+# Copyright (C) Canonical, Ltd.
 #
 # This program is free software: you can redistribute it and/or modify
 # it under the terms of the GNU General Public License version 3 as
@@ -33,7 +33,7 @@ set_target_properties(dnsmasq
   RUNTIME_OUTPUT_DIRECTORY_RELEASE "${CMAKE_BINARY_DIR}/bin/mocks")
 
 target_link_libraries(dnsmasq
-        Qt5::Core)
+        Qt6::Core)
 
 add_executable(dhcp_release
   mock_dhcp_release.cpp)

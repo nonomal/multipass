@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2018-2022 Canonical, Ltd.
+ * Copyright (C) Canonical, Ltd.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -20,6 +20,7 @@
 #include <multipass/platform.h>
 #include <multipass/query.h>
 #include <multipass/url_downloader.h>
+#include <multipass/utils.h>
 
 #include <multipass/exceptions/download_exception.h>
 #include <multipass/exceptions/unsupported_remote_exception.h>
@@ -36,7 +37,6 @@ namespace mp = multipass;
 namespace
 {
 constexpr auto no_remote = "";
-constexpr auto snapcraft_remote = "snapcraft";
 
 struct BaseImageInfo
 {
@@ -51,8 +51,7 @@ struct CustomImageInfo
     QString os;
     QString release;
     QString release_string;
-    QString kernel_location;
-    QString initrd_location;
+    QString release_codename;
 };
 
 const QMap<QString, QMap<QString, CustomImageInfo>> multipass_image_info{
@@ -63,55 +62,41 @@ const QMap<QString, QMap<QString, CustomImageInfo>> multipass_image_info{
         "Ubuntu",
         "core-16",
         "Core 16",
-        "",
-        ""}},
+        "Core 16"}},
       {{"ubuntu-core-18-amd64.img.xz"},
        {"https://cdimage.ubuntu.com/ubuntu-core/18/stable/current/",
         {"core18"},
         "Ubuntu",
         "core-18",
         "Core 18",
-        "",
-        ""}}}}};
-
-const QMap<QString, QMap<QString, CustomImageInfo>> snapcraft_image_info{
-    {{"x86_64"},
-     {{{"ubuntu-16.04-minimal-cloudimg-amd64-disk1.img"},
-       {"https://cloud-images.ubuntu.com/minimal/releases/xenial/release/",
-        {"core", "16.04"},
-        "",
-        "snapcraft-core16",
-        "Snapcraft builder for Core 16",
-        "https://cloud-images.ubuntu.com/releases/xenial/release/unpacked/"
-        "ubuntu-16.04-server-cloudimg-amd64-vmlinuz-generic",
-        "https://cloud-images.ubuntu.com/releases/xenial/release/unpacked/"
-        "ubuntu-16.04-server-cloudimg-amd64-initrd-generic"}},
-      {{"bionic-server-cloudimg-amd64-disk.img"},
-       {"https://cloud-images.ubuntu.com/buildd/releases/bionic/release/",
-        {"core18", "18.04"},
-        "",
-        "snapcraft-core18",
-        "Snapcraft builder for Core 18",
-        "https://cloud-images.ubuntu.com/buildd/releases/bionic/release/unpacked/"
-        "bionic-server-cloudimg-amd64-vmlinuz-generic",
-        "https://cloud-images.ubuntu.com/buildd/releases/bionic/release/unpacked/"
-        "bionic-server-cloudimg-amd64-initrd-generic"}},
-      {{"focal-server-cloudimg-amd64-disk.img"},
-       {"https://cloud-images.ubuntu.com/buildd/releases/focal/release/",
-        {"core20", "20.04"},
-        "",
-        "snapcraft-core20",
-        "Snapcraft builder for Core 20",
-        "https://cloud-images.ubuntu.com/buildd/releases/focal/release/unpacked/"
-        "focal-server-cloudimg-amd64-vmlinuz-generic",
-        "https://cloud-images.ubuntu.com/buildd/releases/focal/release/unpacked/"
-        "focal-server-cloudimg-amd64-initrd-generic"}}}}};
+        "Core 18"}},
+      {{"ubuntu-core-20-amd64.img.xz"},
+       {"https://cdimage.ubuntu.com/ubuntu-core/20/stable/current/",
+        {"core20"},
+        "Ubuntu",
+        "core-20",
+        "Core 20",
+        "Core 20"}},
+      {{"ubuntu-core-22-amd64.img.xz"},
+       {"https://cdimage.ubuntu.com/ubuntu-core/22/stable/current/",
+        {"core22"},
+        "Ubuntu",
+        "core-22",
+        "Core 22",
+        "Core 22"}},
+      {{"ubuntu-core-24-amd64.img.xz"},
+       {"https://cdimage.ubuntu.com/ubuntu-core/24/stable/current/",
+        {"core24"},
+        "Ubuntu",
+        "core-24",
+        "Core 24",
+        "Core 24"}}}}};
 
 auto base_image_info_for(mp::URLDownloader* url_downloader, const QString& image_url, const QString& hash_url,
-                         const QString& image_file)
+                         const QString& image_file, const bool is_force_update_from_network = false)
 {
-    const auto last_modified = url_downloader->last_modified({image_url}).toString("yyyyMMdd");
-    const auto sha256_sums = url_downloader->download({hash_url}).split('\n');
+    const auto last_modified = QLocale::c().toString(url_downloader->last_modified({image_url}), "yyyyMMdd");
+    const auto sha256_sums = url_downloader->download({hash_url}, is_force_update_from_network).split('\n');
     QString hash;
 
     for (const QString line : sha256_sums) // intentional copy
@@ -141,52 +126,50 @@ auto map_aliases_to_vm_info_for(const std::vector<mp::VMImageInfo>& images)
     return map;
 }
 
-auto full_image_info_for(const QMap<QString, CustomImageInfo>& custom_image_info, mp::URLDownloader* url_downloader)
+auto full_image_info_for(const QMap<QString, CustomImageInfo>& custom_image_info, mp::URLDownloader* url_downloader,
+                         const bool is_force_update_from_network = false)
 {
-    std::vector<mp::VMImageInfo> default_images;
+    auto fetch_one_image_info =
+        [is_force_update_from_network,
+         url_downloader](const std::pair<const QString, CustomImageInfo>& image_info_pair) -> mp::VMImageInfo {
+        const auto& [image_file_name, custom_image_info] = image_info_pair;
+        const QString image_url{custom_image_info.url_prefix + image_info_pair.first};
+        const QString hash_url{custom_image_info.url_prefix + QStringLiteral("SHA256SUMS")};
 
-    for (const auto& image_info : custom_image_info.toStdMap())
-    {
-        auto image_file = image_info.first;
-        QString image_url{image_info.second.url_prefix + image_info.first};
-        QString hash_url{image_info.second.url_prefix + QStringLiteral("SHA256SUMS")};
+        const auto base_image_info =
+            base_image_info_for(url_downloader, image_url, hash_url, image_file_name, is_force_update_from_network);
 
-        auto base_image_info = base_image_info_for(url_downloader, image_url, hash_url, image_file);
-        mp::VMImageInfo full_image_info{image_info.second.aliases,
-                                        image_info.second.os,
-                                        image_info.second.release,
-                                        image_info.second.release_string,
-                                        true,      // supported
-                                        image_url, // image_location
-                                        image_info.second.kernel_location,
-                                        image_info.second.initrd_location,
-                                        base_image_info.hash, // id
-                                        "",
-                                        base_image_info.last_modified, // version
-                                        0,
-                                        true};
+        return mp::VMImageInfo{custom_image_info.aliases,
+                               custom_image_info.os,
+                               custom_image_info.release,
+                               custom_image_info.release_string,
+                               custom_image_info.release_codename,
+                               true,                 // supported
+                               image_url,            // image_location
+                               base_image_info.hash, // id
+                               "",
+                               base_image_info.last_modified, // version
+                               0,
+                               true};
+    };
 
-        default_images.push_back(full_image_info);
-    }
-
-    auto map = map_aliases_to_vm_info_for(default_images);
-
-    return std::unique_ptr<mp::CustomManifest>(new mp::CustomManifest{std::move(default_images), std::move(map)});
+    return std::make_unique<mp::CustomManifest>(
+        mp::utils::parallel_transform(custom_image_info.toStdMap(), fetch_one_image_info));
 }
 
 } // namespace
 
-mp::CustomVMImageHost::CustomVMImageHost(const QString& arch, URLDownloader* downloader,
-                                         std::chrono::seconds manifest_time_to_live)
-    : CommonVMImageHost{manifest_time_to_live},
-      arch{arch},
-      url_downloader{downloader},
-      custom_image_info{},
-      remotes{no_remote, snapcraft_remote}
+mp::CustomManifest::CustomManifest(std::vector<VMImageInfo>&& images)
+    : products{std::move(images)}, image_records{map_aliases_to_vm_info_for(products)}
 {
 }
 
-mp::optional<mp::VMImageInfo> mp::CustomVMImageHost::info_for(const Query& query)
+mp::CustomVMImageHost::CustomVMImageHost(const QString& arch, URLDownloader* downloader)
+    : arch{arch}, url_downloader{downloader}, custom_image_info{}, remotes{no_remote}
+{
+}
+
+std::optional<mp::VMImageInfo> mp::CustomVMImageHost::info_for(const Query& query)
 {
     check_alias_is_supported(query.release, query.remote_name);
 
@@ -195,7 +178,7 @@ mp::optional<mp::VMImageInfo> mp::CustomVMImageHost::info_for(const Query& query
     auto it = custom_manifest->image_records.find(query.release);
 
     if (it == custom_manifest->image_records.end())
-        return nullopt;
+        return std::nullopt;
 
     return *it->second;
 }
@@ -205,7 +188,7 @@ std::vector<std::pair<std::string, mp::VMImageInfo>> mp::CustomVMImageHost::all_
     std::vector<std::pair<std::string, mp::VMImageInfo>> images;
 
     auto image = info_for(query);
-    if (image != nullopt)
+    if (image != std::nullopt)
         images.push_back(std::make_pair(query.remote_name, *image));
 
     return images;
@@ -223,7 +206,7 @@ std::vector<mp::VMImageInfo> mp::CustomVMImageHost::all_images_for(const std::st
     auto custom_manifest = manifest_from(remote_name);
 
     auto pred = [this, &remote_name](const auto& product) {
-        return check_all_aliases_are_supported(product.aliases, remote_name);
+        return alias_verifies_image_is_supported(product.aliases, remote_name);
     };
 
     std::copy_if(custom_manifest->products.begin(), custom_manifest->products.end(), std::back_inserter(images), pred);
@@ -237,7 +220,7 @@ void mp::CustomVMImageHost::for_each_entry_do_impl(const Action& action)
     {
         for (const auto& info : manifest.second->products)
         {
-            if (check_all_aliases_are_supported(info.aliases, manifest.first))
+            if (alias_verifies_image_is_supported(info.aliases, manifest.first))
                 action(manifest.first, info);
         }
     }
@@ -248,20 +231,20 @@ std::vector<std::string> mp::CustomVMImageHost::supported_remotes()
     return remotes;
 }
 
-void mp::CustomVMImageHost::fetch_manifests()
+void mp::CustomVMImageHost::fetch_manifests(const bool is_force_update_from_network)
 {
-    for (const auto& spec : {std::make_pair(no_remote, multipass_image_info[arch]),
-                             std::make_pair(snapcraft_remote, snapcraft_image_info[arch])})
+    for (const auto& spec : {std::make_pair(no_remote, multipass_image_info[arch])})
     {
         try
         {
             check_remote_is_supported(spec.first);
-
-            custom_image_info.emplace(spec.first, full_image_info_for(spec.second, url_downloader));
+            std::unique_ptr<mp::CustomManifest> custom_manifest =
+                full_image_info_for(spec.second, url_downloader, is_force_update_from_network);
+            custom_image_info.emplace(spec.first, std::move(custom_manifest));
         }
         catch (mp::DownloadException& e)
         {
-            on_manifest_update_failure(e.what());
+            throw e;
         }
         catch (const mp::UnsupportedRemoteException&)
         {
@@ -278,8 +261,6 @@ void mp::CustomVMImageHost::clear()
 mp::CustomManifest* mp::CustomVMImageHost::manifest_from(const std::string& remote_name)
 {
     check_remote_is_supported(remote_name);
-
-    update_manifests();
 
     auto it = custom_image_info.find(remote_name);
     if (it == custom_image_info.end())

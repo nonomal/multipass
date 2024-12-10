@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2019-2022 Canonical, Ltd.
+ * Copyright (C) Canonical, Ltd.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -87,6 +87,10 @@ mp::LibvirtWrapper::LibvirtWrapper(const std::string& filename)
           reinterpret_cast<virDomainManagedSave_t>(get_symbol_address_for("virDomainManagedSave", handle))},
       virDomainHasManagedSaveImage{reinterpret_cast<virDomainHasManagedSaveImage_t>(
           get_symbol_address_for("virDomainHasManagedSaveImage", handle))},
+      virDomainSetVcpusFlags{
+          reinterpret_cast<virDomainSetVcpusFlags_t>(get_symbol_address_for("virDomainSetVcpusFlags", handle))},
+      virDomainSetMemoryFlags{
+          reinterpret_cast<virDomainSetMemoryFlags_t>(get_symbol_address_for("virDomainSetMemoryFlags", handle))},
       virGetLastErrorMessage{
           reinterpret_cast<virGetLastErrorMessage_t>(get_symbol_address_for("virGetLastErrorMessage", handle))}
 {

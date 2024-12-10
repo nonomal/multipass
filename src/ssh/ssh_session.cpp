@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2017-2022 Canonical, Ltd.
+ * Copyright (C) Canonical, Ltd.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -23,8 +23,6 @@
 #include <multipass/ssh/throw_on_error.h>
 #include <multipass/standard_paths.h>
 
-#include <libssh/callbacks.h>
-
 #include <QDir>
 
 #include <string>
@@ -32,9 +30,12 @@
 namespace mp = multipass;
 namespace mpl = multipass::logging;
 
-mp::SSHSession::SSHSession(const std::string& host, int port, const std::string& username,
-                           const SSHKeyProvider* key_provider, const std::chrono::milliseconds timeout)
-    : session{ssh_new(), ssh_free}
+mp::SSHSession::SSHSession(const std::string& host,
+                           int port,
+                           const std::string& username,
+                           const SSHKeyProvider& key_provider,
+                           const std::chrono::milliseconds timeout)
+    : session{ssh_new(), ssh_free}, mut{}
 {
     if (session == nullptr)
         throw mp::SSHException("could not allocate ssh session");
@@ -53,28 +54,48 @@ mp::SSHSession::SSHSession(const std::string& host, int port, const std::string&
     set_option(SSH_OPTIONS_SSH_DIR, ssh_dir.c_str());
 
     SSH::throw_on_error(session, "ssh connection failed", ssh_connect);
-    if (key_provider)
+
+    SSH::throw_on_error(session,
+                        "ssh failed to authenticate",
+                        ssh_userauth_publickey,
+                        nullptr,
+                        key_provider.private_key());
+}
+
+multipass::SSHSession::SSHSession(multipass::SSHSession&& other)
+    : SSHSession(std::move(other), std::unique_lock{other.mut})
+{
+}
+
+multipass::SSHSession::SSHSession(multipass::SSHSession&& other, std::unique_lock<std::mutex>)
+    : session{std::move(other.session)}, mut{}
+{
+}
+
+multipass::SSHSession& multipass::SSHSession::operator=(multipass::SSHSession&& other)
+{
+    if (this != &other)
     {
-        SSH::throw_on_error(session, "ssh failed to authenticate", ssh_userauth_publickey, nullptr,
-                            key_provider->private_key());
+        std::scoped_lock lock{mut, other.mut};
+        session = std::move(other.session);
     }
+
+    return *this;
 }
 
-mp::SSHSession::SSHSession(const std::string& host, int port, const std::string& username,
-                           const SSHKeyProvider& key_provider, const std::chrono::milliseconds timeout)
-    : SSHSession(host, port, username, &key_provider, timeout)
+multipass::SSHSession::~SSHSession()
 {
+    std::unique_lock lock{mut};
+    ssh_disconnect(session.get());
+    force_shutdown(); // do we really need this?
 }
 
-mp::SSHSession::SSHSession(const std::string& host, int port, const std::chrono::milliseconds timeout)
-    : SSHSession(host, port, "ubuntu", nullptr, timeout)
+mp::SSHProcess mp::SSHSession::exec(const std::string& cmd, bool whisper)
 {
-}
+    auto lvl = whisper ? mpl::Level::trace : mpl::Level::debug;
+    mpl::log(lvl, "ssh session", fmt::format("Executing '{}'", cmd));
 
-mp::SSHProcess mp::SSHSession::exec(const std::string& cmd)
-{
-    mpl::log(mpl::Level::debug, "ssh session", fmt::format("Executing '{}'", cmd));
-    return {session.get(), cmd};
+    return {session.get(), cmd, std::unique_lock{mut}};
 }
 
 void mp::SSHSession::force_shutdown()
@@ -85,7 +106,7 @@ void mp::SSHSession::force_shutdown()
     shutdown(socket, shutdown_read_and_writes);
 }
 
-mp::SSHSession::operator ssh_session() const
+mp::SSHSession::operator ssh_session()
 {
     return session.get();
 }
@@ -149,4 +170,10 @@ void mp::SSHSession::set_option(ssh_options_e type, const void* data)
         throw mp::SSHException(fmt::format("libssh failed to set {} option to '{}': '{}'", name_for(type),
                                            as_string(type, data), ssh_get_error(session.get())));
     }
+}
+
+bool multipass::SSHSession::is_connected() const
+{
+    std::unique_lock lock{mut};
+    return static_cast<bool>(ssh_is_connected(session.get()));
 }

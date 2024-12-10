@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2019-2022 Canonical, Ltd.
+ * Copyright (C) Canonical, Ltd.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -25,30 +25,37 @@ namespace multipass
 class MemorySize
 {
 public:
-    friend bool operator==(const MemorySize& a, const MemorySize& b);
-    friend bool operator!=(const MemorySize& a, const MemorySize& b);
-    friend bool operator<(const MemorySize& a, const MemorySize& b);
-    friend bool operator>(const MemorySize& a, const MemorySize& b);
-    friend bool operator<=(const MemorySize& a, const MemorySize& b);
-    friend bool operator>=(const MemorySize& a, const MemorySize& b);
+    friend bool operator==(const MemorySize& a, const MemorySize& b) noexcept;
+    friend bool operator!=(const MemorySize& a, const MemorySize& b) noexcept;
+    friend bool operator<(const MemorySize& a, const MemorySize& b) noexcept;
+    friend bool operator>(const MemorySize& a, const MemorySize& b) noexcept;
+    friend bool operator<=(const MemorySize& a, const MemorySize& b) noexcept;
+    friend bool operator>=(const MemorySize& a, const MemorySize& b) noexcept;
 
-    MemorySize();
+    MemorySize() noexcept;
     explicit MemorySize(const std::string& val);
     long long in_bytes() const noexcept;
     long long in_kilobytes() const noexcept;
     long long in_megabytes() const noexcept;
     long long in_gigabytes() const noexcept;
 
+    std::string human_readable(unsigned int precision = 1, bool trim_zeros = false) const;
+
+    static MemorySize from_bytes(long long bytes) noexcept;
+
 private:
+    explicit MemorySize(long long bytes) noexcept;
     long long bytes;
 };
 
-bool operator==(const MemorySize& a, const MemorySize& b);
-bool operator!=(const MemorySize& a, const MemorySize& b);
-bool operator<(const MemorySize& a, const MemorySize& b);
-bool operator>(const MemorySize& a, const MemorySize& b);
-bool operator<=(const MemorySize& a, const MemorySize& b);
-bool operator>=(const MemorySize& a, const MemorySize& b);
+long long in_bytes(const std::string& mem_value);
+
+bool operator==(const MemorySize& a, const MemorySize& b) noexcept;
+bool operator!=(const MemorySize& a, const MemorySize& b) noexcept;
+bool operator<(const MemorySize& a, const MemorySize& b) noexcept;
+bool operator>(const MemorySize& a, const MemorySize& b) noexcept;
+bool operator<=(const MemorySize& a, const MemorySize& b) noexcept;
+bool operator>=(const MemorySize& a, const MemorySize& b) noexcept;
 
 } // namespace multipass
 

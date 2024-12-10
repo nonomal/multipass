@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2019-2022 Canonical, Ltd.
+ * Copyright (C) Canonical, Ltd.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -22,7 +22,7 @@
 #include <multipass/snap_utils.h>
 
 namespace mp = multipass;
-namespace mu = multipass::utils;
+namespace mpu = multipass::utils;
 
 mp::DNSMasqProcessSpec::DNSMasqProcessSpec(const mp::Path& data_dir, const QString& bridge_name,
                                            const std::string& subnet, const QString& conf_file_path)
@@ -48,6 +48,7 @@ QStringList mp::DNSMasqProcessSpec::arguments() const
                          << "--except-interface=lo" << QString("--interface=%1").arg(bridge_name)
                          << QString("--listen-address=%1").arg(QString::fromStdString(bridge_addr.as_string()))
                          << "--dhcp-no-override"
+                         << "--dhcp-ignore-clid"
                          << "--dhcp-authoritative" << QString("--dhcp-leasefile=%1/dnsmasq.leases").arg(data_dir)
                          << QString("--dhcp-hostsfile=%1/dnsmasq.hosts").arg(data_dir) << "--dhcp-range"
                          << QString("%1,%2,infinite")
@@ -111,7 +112,7 @@ profile %1 flags=(attach_disconnected) {
     try
     {
         // if snap confined, specify only multipassd can kill dnsmasq
-        root_dir = mu::snap_dir();
+        root_dir = mpu::snap_dir();
         signal_peer = "snap.multipass.multipassd";
     }
     catch (const mp::SnapEnvironmentException&)

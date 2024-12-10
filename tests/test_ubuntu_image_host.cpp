@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2017-2022 Canonical, Ltd.
+ * Copyright (C) Canonical, Ltd.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -19,11 +19,14 @@
 #include "image_host_remote_count.h"
 #include "mischievous_url_downloader.h"
 #include "mock_platform.h"
+#include "mock_settings.h"
 #include "path.h"
 #include "stub_url_downloader.h"
 
 #include <src/daemon/ubuntu_image_host.h>
 
+#include <multipass/constants.h>
+#include <multipass/exceptions/download_exception.h>
 #include <multipass/exceptions/unsupported_alias_exception.h>
 #include <multipass/exceptions/unsupported_image_exception.h>
 #include <multipass/exceptions/unsupported_remote_exception.h>
@@ -32,6 +35,7 @@
 #include <QUrl>
 
 #include <cstddef>
+#include <optional>
 #include <unordered_set>
 
 namespace mp = multipass;
@@ -47,8 +51,12 @@ struct UbuntuImageHost : public testing::Test
 {
     UbuntuImageHost()
     {
-        EXPECT_CALL(*mock_platform, is_remote_supported(_)).WillRepeatedly(Return(true));
-        EXPECT_CALL(*mock_platform, is_alias_supported(_, _)).WillRepeatedly(Return(true));
+        EXPECT_CALL(mock_platform, is_remote_supported(_)).WillRepeatedly(Return(true));
+        EXPECT_CALL(mock_platform, is_alias_supported(_, _)).WillRepeatedly(Return(true));
+
+        EXPECT_CALL(mock_settings, get(Eq(mp::driver_key))).WillRepeatedly(Return("emu")); /* TODO parameterize driver
+                                                                                              (code branches for lxd) */
+        EXPECT_CALL(mock_settings, get(Eq(mp::mirror_key))).WillRepeatedly(Return(""));
     }
 
     mp::Query make_query(std::string release, std::string remote)
@@ -56,25 +64,40 @@ struct UbuntuImageHost : public testing::Test
         return {"", std::move(release), false, std::move(remote), mp::Query::Type::Alias};
     }
 
-    QString host_url{QUrl::fromLocalFile(mpt::test_data_path()).toString() + "releases/"};
-    QString daily_url{QUrl::fromLocalFile(mpt::test_data_path()).toString() + "daily/"};
-    std::pair<std::string, std::string> release_remote_spec = {"release", host_url.toStdString()};
-    std::pair<std::string, std::string> daily_remote_spec = {"daily", daily_url.toStdString()};
-    std::vector<std::pair<std::string, std::string>> all_remote_specs = {release_remote_spec, daily_remote_spec};
+    QString test_host = QUrl::fromLocalFile(mpt::test_data_path()).toString();
+    QString test_valid_mirror_host = QUrl::fromLocalFile(mpt::test_data_sub_dir_path("valid_image_mirror")).toString();
+    QString test_valid_outdated_mirror_host =
+        QUrl::fromLocalFile(mpt::test_data_sub_dir_path("valid_outdated_image_mirror")).toString();
+    QString test_invalid_mirror_host =
+        QUrl::fromLocalFile(mpt::test_data_sub_dir_path("invalid_image_mirror")).toString();
+
+    std::string mock_image_host = test_host.toStdString();
+    QString host_url{test_host + "releases/"};
+    QString daily_url{test_host + "daily/"};
+    std::pair<std::string, mp::UbuntuVMImageRemote> release_remote_spec = {
+        "release", mp::UbuntuVMImageRemote{mock_image_host, "releases/"}};
+    std::pair<std::string, mp::UbuntuVMImageRemote> release_remote_spec_with_mirror_allowed = {
+        "release", mp::UbuntuVMImageRemote{mock_image_host, "releases/", std::make_optional<QString>(mp::mirror_key)}};
+    std::pair<std::string, mp::UbuntuVMImageRemote> daily_remote_spec = {
+        "daily", mp::UbuntuVMImageRemote{mock_image_host, "daily/"}};
+    std::vector<std::pair<std::string, mp::UbuntuVMImageRemote>> all_remote_specs = {release_remote_spec,
+                                                                                     daily_remote_spec};
     mpt::MischievousURLDownloader url_downloader{std::chrono::seconds{10}};
-    std::chrono::seconds default_ttl{1};
     QString expected_location{host_url + "newest_image.img"};
     QString expected_id{"8842e7a8adb01c7a30cc702b01a5330a1951b12042816e87efd24b61c5e2239f"};
 
-    mpt::MockPlatform::GuardedMock attr{mpt::MockPlatform::inject()};
-    mpt::MockPlatform* mock_platform = attr.first;
+    mpt::MockPlatform::GuardedMock mock_platform_injection{mpt::MockPlatform::inject()};
+    mpt::MockPlatform& mock_platform = *mock_platform_injection.first;
+
+    mpt::MockSettings::GuardedMock mock_settings_injection = mpt::MockSettings::inject<StrictMock>();
+    mpt::MockSettings& mock_settings = *mock_settings_injection.first;
 };
-}
+} // namespace
 
 TEST_F(UbuntuImageHost, returns_expected_info)
 {
-    mp::UbuntuVMImageHost host{{release_remote_spec}, &url_downloader, default_ttl};
-
+    mp::UbuntuVMImageHost host{{release_remote_spec}, &url_downloader};
+    host.update_manifests(false);
     auto info = host.info_for(make_query("xenial", release_remote_spec.first));
 
     ASSERT_TRUE(info);
@@ -82,9 +105,51 @@ TEST_F(UbuntuImageHost, returns_expected_info)
     EXPECT_THAT(info->id, Eq(expected_id));
 }
 
+TEST_F(UbuntuImageHost, returns_expected_mirror_info)
+{
+    EXPECT_CALL(mock_settings, get(Eq(mp::mirror_key))).WillRepeatedly(Return(test_valid_mirror_host));
+
+    mp::UbuntuVMImageHost host{{release_remote_spec_with_mirror_allowed}, &url_downloader};
+    host.update_manifests(false);
+
+    auto info = host.info_for(make_query("xenial", release_remote_spec.first));
+    QString expected_location{test_valid_mirror_host + "releases/" + "newest_image.img"};
+
+    ASSERT_TRUE(info);
+    EXPECT_THAT(info->image_location, Eq(expected_location));
+    EXPECT_THAT(info->id, Eq(expected_id));
+}
+
+TEST_F(UbuntuImageHost, returns_expected_mirror_info_with_most_recent_image)
+{
+    EXPECT_CALL(mock_settings, get(Eq(mp::mirror_key))).WillRepeatedly(Return(test_valid_outdated_mirror_host));
+
+    mp::UbuntuVMImageHost host{{release_remote_spec_with_mirror_allowed}, &url_downloader};
+    host.update_manifests(false);
+
+    auto info = host.info_for(make_query("xenial", release_remote_spec.first));
+    QString expected_location{test_valid_outdated_mirror_host + "releases/" + "test_image.img"};
+    QString expected_id{"1797c5c82016c1e65f4008fcf89deae3a044ef76087a9ec5b907c6d64a3609ac"};
+
+    ASSERT_TRUE(info);
+    EXPECT_THAT(info->image_location, Eq(expected_location));
+    EXPECT_THAT(info->id, Eq(expected_id));
+}
+
+TEST_F(UbuntuImageHost, throw_if_mirror_is_invalid)
+{
+    EXPECT_CALL(mock_settings, get(Eq(mp::mirror_key))).WillRepeatedly(Return(test_invalid_mirror_host));
+
+    mp::UbuntuVMImageHost host{{release_remote_spec_with_mirror_allowed}, &url_downloader};
+    host.update_manifests(false);
+
+    EXPECT_THROW(host.info_for(make_query("xenial", release_remote_spec.first)), std::runtime_error);
+}
+
 TEST_F(UbuntuImageHost, uses_default_on_unspecified_release)
 {
-    mp::UbuntuVMImageHost host{{release_remote_spec}, &url_downloader, default_ttl};
+    mp::UbuntuVMImageHost host{{release_remote_spec}, &url_downloader};
+    host.update_manifests(false);
 
     auto info = host.info_for(make_query("", release_remote_spec.first));
 
@@ -95,7 +160,8 @@ TEST_F(UbuntuImageHost, uses_default_on_unspecified_release)
 
 TEST_F(UbuntuImageHost, iterates_over_all_entries)
 {
-    mp::UbuntuVMImageHost host{{release_remote_spec}, &url_downloader, default_ttl};
+    mp::UbuntuVMImageHost host{{release_remote_spec}, &url_downloader};
+    host.update_manifests(false);
 
     std::unordered_set<std::string> ids;
     auto action = [&ids](const std::string& remote, const mp::VMImageInfo& info) { ids.insert(info.id.toStdString()); };
@@ -113,12 +179,13 @@ TEST_F(UbuntuImageHost, iterates_over_all_entries)
 
 TEST_F(UbuntuImageHost, unsupported_alias_iterates_over_expected_entries)
 {
-    mp::UbuntuVMImageHost host{{release_remote_spec}, &url_downloader, default_ttl};
+    mp::UbuntuVMImageHost host{{release_remote_spec}, &url_downloader};
+    host.update_manifests(false);
 
     std::unordered_set<std::string> ids;
     auto action = [&ids](const std::string& remote, const mp::VMImageInfo& info) { ids.insert(info.id.toStdString()); };
 
-    EXPECT_CALL(*mock_platform, is_alias_supported("zesty", _)).WillRepeatedly(Return(false));
+    EXPECT_CALL(mock_platform, is_alias_supported(AnyOf("zesty", "17.04", "z"), _)).WillRepeatedly(Return(false));
 
     host.for_each_entry_do(action);
 
@@ -128,7 +195,8 @@ TEST_F(UbuntuImageHost, unsupported_alias_iterates_over_expected_entries)
 
 TEST_F(UbuntuImageHost, can_query_by_hash)
 {
-    mp::UbuntuVMImageHost host{{release_remote_spec}, &url_downloader, default_ttl};
+    mp::UbuntuVMImageHost host{{release_remote_spec}, &url_downloader};
+    host.update_manifests(false);
     const auto expected_id = "1797c5c82016c1e65f4008fcf89deae3a044ef76087a9ec5b907c6d64a3609ac";
     auto info = host.info_for(make_query(expected_id, release_remote_spec.first));
 
@@ -138,7 +206,8 @@ TEST_F(UbuntuImageHost, can_query_by_hash)
 
 TEST_F(UbuntuImageHost, can_query_by_partial_hash)
 {
-    mp::UbuntuVMImageHost host{{release_remote_spec}, &url_downloader, default_ttl};
+    mp::UbuntuVMImageHost host{{release_remote_spec}, &url_downloader};
+    host.update_manifests(false);
     const auto expected_id = "1797c5c82016c1e65f4008fcf89deae3a044ef76087a9ec5b907c6d64a3609ac";
 
     QStringList short_hashes;
@@ -159,7 +228,8 @@ TEST_F(UbuntuImageHost, can_query_by_partial_hash)
 
 TEST_F(UbuntuImageHost, supports_multiple_manifests)
 {
-    mp::UbuntuVMImageHost host{all_remote_specs, &url_downloader, default_ttl};
+    mp::UbuntuVMImageHost host{all_remote_specs, &url_downloader};
+    host.update_manifests(false);
 
     QString daily_expected_location{daily_url + "newest-artful.img"};
     QString daily_expected_id{"c09f123b9589c504fe39ec6e9ebe5188c67be7d1fc4fb80c969bf877f5a8333a"};
@@ -179,7 +249,8 @@ TEST_F(UbuntuImageHost, supports_multiple_manifests)
 
 TEST_F(UbuntuImageHost, looks_for_aliases_before_hashes)
 {
-    mp::UbuntuVMImageHost host{all_remote_specs, &url_downloader, default_ttl};
+    mp::UbuntuVMImageHost host{all_remote_specs, &url_downloader};
+    host.update_manifests(false);
 
     QString daily_expected_location{daily_url + "newest-artful.img"};
     QString daily_expected_id{"c09f123b9589c504fe39ec6e9ebe5188c67be7d1fc4fb80c969bf877f5a8333a"};
@@ -193,7 +264,8 @@ TEST_F(UbuntuImageHost, looks_for_aliases_before_hashes)
 
 TEST_F(UbuntuImageHost, all_info_release_returns_multiple_hash_matches)
 {
-    mp::UbuntuVMImageHost host{all_remote_specs, &url_downloader, default_ttl};
+    mp::UbuntuVMImageHost host{all_remote_specs, &url_downloader};
+    host.update_manifests(false);
 
     auto images_info = host.all_info_for(make_query("1", release_remote_spec.first));
 
@@ -203,7 +275,8 @@ TEST_F(UbuntuImageHost, all_info_release_returns_multiple_hash_matches)
 
 TEST_F(UbuntuImageHost, all_info_daily_no_matches_returns_empty_vector)
 {
-    mp::UbuntuVMImageHost host{all_remote_specs, &url_downloader, default_ttl};
+    mp::UbuntuVMImageHost host{all_remote_specs, &url_downloader};
+    host.update_manifests(false);
 
     auto images = host.all_info_for(make_query("1", daily_remote_spec.first));
 
@@ -212,7 +285,8 @@ TEST_F(UbuntuImageHost, all_info_daily_no_matches_returns_empty_vector)
 
 TEST_F(UbuntuImageHost, all_info_release_returns_one_alias_match)
 {
-    mp::UbuntuVMImageHost host{all_remote_specs, &url_downloader, default_ttl};
+    mp::UbuntuVMImageHost host{all_remote_specs, &url_downloader};
+    host.update_manifests(false);
 
     auto images_info = host.all_info_for(make_query("xenial", release_remote_spec.first));
 
@@ -222,7 +296,8 @@ TEST_F(UbuntuImageHost, all_info_release_returns_one_alias_match)
 
 TEST_F(UbuntuImageHost, all_images_for_release_returns_four_matches)
 {
-    mp::UbuntuVMImageHost host{all_remote_specs, &url_downloader, default_ttl};
+    mp::UbuntuVMImageHost host{all_remote_specs, &url_downloader};
+    host.update_manifests(false);
 
     auto images = host.all_images_for(release_remote_spec.first, false);
 
@@ -232,7 +307,8 @@ TEST_F(UbuntuImageHost, all_images_for_release_returns_four_matches)
 
 TEST_F(UbuntuImageHost, all_images_for_release_unsupported_returns_five_matches)
 {
-    mp::UbuntuVMImageHost host{all_remote_specs, &url_downloader, default_ttl};
+    mp::UbuntuVMImageHost host{all_remote_specs, &url_downloader};
+    host.update_manifests(false);
 
     auto images = host.all_images_for(release_remote_spec.first, true);
 
@@ -242,7 +318,8 @@ TEST_F(UbuntuImageHost, all_images_for_release_unsupported_returns_five_matches)
 
 TEST_F(UbuntuImageHost, all_images_for_daily_returns_all_matches)
 {
-    mp::UbuntuVMImageHost host{all_remote_specs, &url_downloader, default_ttl};
+    mp::UbuntuVMImageHost host{all_remote_specs, &url_downloader};
+    host.update_manifests(false);
 
     auto images = host.all_images_for(daily_remote_spec.first, false);
 
@@ -252,11 +329,10 @@ TEST_F(UbuntuImageHost, all_images_for_daily_returns_all_matches)
 
 TEST_F(UbuntuImageHost, all_images_for_release_unsupported_alias_returns_three_matches)
 {
-    mp::UbuntuVMImageHost host{all_remote_specs, &url_downloader, default_ttl};
+    mp::UbuntuVMImageHost host{all_remote_specs, &url_downloader};
+    host.update_manifests(false);
 
-    const std::string unsupported_alias{"zesty"};
-
-    EXPECT_CALL(*mock_platform, is_alias_supported(unsupported_alias, _)).WillOnce(Return(false));
+    EXPECT_CALL(mock_platform, is_alias_supported(AnyOf("zesty", "17.04", "z"), _)).WillRepeatedly(Return(false));
 
     auto images = host.all_images_for(release_remote_spec.first, false);
 
@@ -266,7 +342,8 @@ TEST_F(UbuntuImageHost, all_images_for_release_unsupported_alias_returns_three_m
 
 TEST_F(UbuntuImageHost, supported_remotes_returns_expected_values)
 {
-    mp::UbuntuVMImageHost host{all_remote_specs, &url_downloader, default_ttl};
+    mp::UbuntuVMImageHost host{all_remote_specs, &url_downloader};
+    host.update_manifests(false);
 
     auto supported_remotes = host.supported_remotes();
 
@@ -281,65 +358,73 @@ TEST_F(UbuntuImageHost, supported_remotes_returns_expected_values)
 
 TEST_F(UbuntuImageHost, invalid_remote_throws_error)
 {
-    mpt::StubURLDownloader stub_url_downloader;
-    mp::UbuntuVMImageHost host{all_remote_specs, &stub_url_downloader, default_ttl};
+    mp::UbuntuVMImageHost host{all_remote_specs, &url_downloader};
+    host.update_manifests(false);
 
     EXPECT_THROW(host.info_for(make_query("xenial", "foo")), std::runtime_error);
 }
 
 TEST_F(UbuntuImageHost, handles_and_recovers_from_initial_network_failure)
 {
-    const auto ttl = 1h; // so that updates are only retried when unsuccessful
     url_downloader.mischiefs = 1000;
-    mp::UbuntuVMImageHost host{all_remote_specs, &url_downloader, ttl};
+    mp::UbuntuVMImageHost host{all_remote_specs, &url_downloader};
+    EXPECT_THROW(host.update_manifests(false), mp::DownloadException);
 
     const auto query = make_query("xenial", release_remote_spec.first);
     EXPECT_THROW(host.info_for(query), std::runtime_error);
 
     url_downloader.mischiefs = 0;
+    host.update_manifests(false);
     EXPECT_TRUE(host.info_for(query));
 }
 
 TEST_F(UbuntuImageHost, handles_and_recovers_from_later_network_failure)
 {
-    const auto ttl = 0s; // to ensure updates are always retried
-    mp::UbuntuVMImageHost host{all_remote_specs, &url_downloader, ttl};
+    mp::UbuntuVMImageHost host{all_remote_specs, &url_downloader};
 
     const auto query = make_query("xenial", release_remote_spec.first);
+    host.update_manifests(false);
     EXPECT_TRUE(host.info_for(query));
 
     url_downloader.mischiefs = 1000;
+    EXPECT_THROW(host.update_manifests(false), mp::DownloadException);
     EXPECT_THROW(host.info_for(query), std::runtime_error);
 
     url_downloader.mischiefs = 0;
+    host.update_manifests(false);
     EXPECT_TRUE(host.info_for(query));
 }
 
 TEST_F(UbuntuImageHost, handles_and_recovers_from_independent_server_failures)
 {
-    const auto ttl = 0h;
-    mp::UbuntuVMImageHost host{all_remote_specs, &url_downloader, ttl};
+    mp::UbuntuVMImageHost host{all_remote_specs, &url_downloader};
+    host.update_manifests(false);
 
     const auto num_remotes = mpt::count_remotes(host);
     EXPECT_GT(num_remotes, 0u);
 
-    for (size_t i = 0; i < num_remotes; ++i)
+    url_downloader.mischiefs = 0;
+    EXPECT_EQ(mpt::count_remotes(host), num_remotes);
+
+    for (size_t i = 1; i < num_remotes; ++i)
     {
         url_downloader.mischiefs = i;
-        EXPECT_EQ(mpt::count_remotes(host), num_remotes - i);
+        EXPECT_THROW(mpt::count_remotes(host), mp::DownloadException);
     }
 }
 
 TEST_F(UbuntuImageHost, throws_unsupported_image_when_image_not_supported)
 {
-    mp::UbuntuVMImageHost host{all_remote_specs, &url_downloader, default_ttl};
+    mp::UbuntuVMImageHost host{all_remote_specs, &url_downloader};
+    host.update_manifests(false);
 
     EXPECT_THROW(host.info_for(make_query("artful", release_remote_spec.first)), mp::UnsupportedImageException);
 }
 
 TEST_F(UbuntuImageHost, devel_request_with_no_remote_returns_expected_info)
 {
-    mp::UbuntuVMImageHost host{all_remote_specs, &url_downloader, default_ttl};
+    mp::UbuntuVMImageHost host{all_remote_specs, &url_downloader};
+    host.update_manifests(false);
 
     QString daily_expected_location{daily_url + "newest-artful.img"};
     QString daily_expected_id{"c09f123b9589c504fe39ec6e9ebe5188c67be7d1fc4fb80c969bf877f5a8333a"};
@@ -353,7 +438,8 @@ TEST_F(UbuntuImageHost, devel_request_with_no_remote_returns_expected_info)
 
 TEST_F(UbuntuImageHost, info_for_too_many_hash_matches_throws)
 {
-    mp::UbuntuVMImageHost host{{release_remote_spec}, &url_downloader, default_ttl};
+    mp::UbuntuVMImageHost host{{release_remote_spec}, &url_downloader};
+    host.update_manifests(false);
 
     const std::string release{"1"};
 
@@ -363,7 +449,8 @@ TEST_F(UbuntuImageHost, info_for_too_many_hash_matches_throws)
 
 TEST_F(UbuntuImageHost, info_for_same_full_hash_in_both_remotes_does_not_throw)
 {
-    mp::UbuntuVMImageHost host{all_remote_specs, &url_downloader, default_ttl};
+    mp::UbuntuVMImageHost host{all_remote_specs, &url_downloader};
+    host.update_manifests(false);
 
     const auto hash_query{"ab115b83e7a8bebf3d3a02bf55ad0cb75a0ed515fcbc65fb0c9abe76c752921c"};
 
@@ -372,7 +459,8 @@ TEST_F(UbuntuImageHost, info_for_same_full_hash_in_both_remotes_does_not_throw)
 
 TEST_F(UbuntuImageHost, info_for_partial_hash_in_both_remotes_throws)
 {
-    mp::UbuntuVMImageHost host{all_remote_specs, &url_downloader, default_ttl};
+    mp::UbuntuVMImageHost host{all_remote_specs, &url_downloader};
+    host.update_manifests(false);
 
     const auto hash_query{"ab115"};
 
@@ -382,7 +470,8 @@ TEST_F(UbuntuImageHost, info_for_partial_hash_in_both_remotes_throws)
 
 TEST_F(UbuntuImageHost, all_info_for_no_remote_query_defaults_to_release)
 {
-    mp::UbuntuVMImageHost host{all_remote_specs, &url_downloader, default_ttl};
+    mp::UbuntuVMImageHost host{all_remote_specs, &url_downloader};
+    host.update_manifests(false);
 
     auto images_info = host.all_info_for(make_query("1", ""));
 
@@ -392,7 +481,8 @@ TEST_F(UbuntuImageHost, all_info_for_no_remote_query_defaults_to_release)
 
 TEST_F(UbuntuImageHost, all_info_for_unsupported_image_throw)
 {
-    mp::UbuntuVMImageHost host{all_remote_specs, &url_downloader, default_ttl};
+    mp::UbuntuVMImageHost host{all_remote_specs, &url_downloader};
+    host.update_manifests(false);
 
     const std::string release{"artful"};
 
@@ -403,10 +493,11 @@ TEST_F(UbuntuImageHost, all_info_for_unsupported_image_throw)
 
 TEST_F(UbuntuImageHost, all_info_for_unsupported_alias_throws)
 {
-    mp::UbuntuVMImageHost host{all_remote_specs, &url_downloader, default_ttl};
+    mp::UbuntuVMImageHost host{all_remote_specs, &url_downloader};
+    host.update_manifests(false);
 
     const std::string unsupported_alias{"daily"};
-    EXPECT_CALL(*mock_platform, is_alias_supported(unsupported_alias, _)).WillOnce(Return(false));
+    EXPECT_CALL(mock_platform, is_alias_supported(unsupported_alias, _)).WillOnce(Return(false));
 
     MP_EXPECT_THROW_THAT(
         host.all_info_for(make_query(unsupported_alias, release_remote_spec.first)), mp::UnsupportedAliasException,
@@ -415,10 +506,11 @@ TEST_F(UbuntuImageHost, all_info_for_unsupported_alias_throws)
 
 TEST_F(UbuntuImageHost, info_for_unsupported_remote_throws)
 {
-    mp::UbuntuVMImageHost host{all_remote_specs, &url_downloader, default_ttl};
+    mp::UbuntuVMImageHost host{all_remote_specs, &url_downloader};
+    host.update_manifests(false);
 
     const std::string unsupported_remote{"bar"};
-    EXPECT_CALL(*mock_platform, is_remote_supported(unsupported_remote)).WillRepeatedly(Return(false));
+    EXPECT_CALL(mock_platform, is_remote_supported(unsupported_remote)).WillRepeatedly(Return(false));
 
     MP_EXPECT_THROW_THAT(host.info_for(make_query("xenial", unsupported_remote)), mp::UnsupportedRemoteException,
                          mpt::match_what(HasSubstr(fmt::format(
@@ -427,9 +519,10 @@ TEST_F(UbuntuImageHost, info_for_unsupported_remote_throws)
 
 TEST_F(UbuntuImageHost, info_for_no_remote_first_unsupported_returns_expected_info)
 {
-    mp::UbuntuVMImageHost host{all_remote_specs, &url_downloader, default_ttl};
+    mp::UbuntuVMImageHost host{all_remote_specs, &url_downloader};
+    host.update_manifests(false);
 
-    EXPECT_CALL(*mock_platform, is_remote_supported("release")).Times(AtLeast(1)).WillRepeatedly(Return(false));
+    EXPECT_CALL(mock_platform, is_remote_supported("release")).Times(AtLeast(1)).WillRepeatedly(Return(false));
 
     auto info = host.info_for(make_query("artful", ""));
 

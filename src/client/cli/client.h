@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2017-2022 Canonical, Ltd.
+ * Copyright (C) Canonical, Ltd.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -50,7 +50,6 @@ protected:
     void sort_commands();
 
 private:
-    std::shared_ptr<grpc::Channel> rpc_channel;
     std::unique_ptr<multipass::Rpc::Stub> stub;
 
     std::vector<cmd::Command::UPtr> commands;
@@ -63,7 +62,7 @@ private:
 template <typename T, typename... Ts>
 void multipass::Client::add_command(Ts&&... params)
 {
-    auto cmd = std::make_unique<T>(*rpc_channel, *stub, term, std::forward<Ts>(params)...);
+    auto cmd = std::make_unique<T>(*stub, term, std::forward<Ts>(params)...);
     commands.push_back(std::move(cmd));
 }
 

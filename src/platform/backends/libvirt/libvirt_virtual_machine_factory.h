@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2018-2022 Canonical, Ltd.
+ * Copyright (C) Canonical, Ltd.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -36,15 +36,18 @@ public:
     ~LibVirtVirtualMachineFactory();
 
     VirtualMachine::UPtr create_virtual_machine(const VirtualMachineDescription& desc,
+                                                const SSHKeyProvider& key_provider,
                                                 VMStatusMonitor& monitor) override;
-    void remove_resources_for(const std::string& name) override;
     VMImage prepare_source_image(const VMImage& source_image) override;
     void prepare_instance_image(const VMImage& instance_image, const VirtualMachineDescription& desc) override;
     void hypervisor_health_check() override;
-    QString get_backend_version_string() override;
+    QString get_backend_version_string() const override;
 
     // Making this public makes this modifiable which is necessary for testing
     LibvirtWrapper::UPtr libvirt_wrapper;
+
+protected:
+    void remove_resources_for_impl(const std::string& name) override;
 
 private:
     const Path data_dir;

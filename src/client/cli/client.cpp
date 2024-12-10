@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2017-2022 Canonical, Ltd.
+ * Copyright (C) Canonical, Ltd.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -18,6 +18,8 @@
 #include "client.h"
 #include "cmd/alias.h"
 #include "cmd/aliases.h"
+#include "cmd/authenticate.h"
+#include "cmd/clone.h"
 #include "cmd/delete.h"
 #include "cmd/exec.h"
 #include "cmd/find.h"
@@ -28,12 +30,15 @@
 #include "cmd/list.h"
 #include "cmd/mount.h"
 #include "cmd/networks.h"
+#include "cmd/prefer.h"
 #include "cmd/purge.h"
 #include "cmd/recover.h"
-#include "cmd/register.h"
+#include "cmd/remote_settings_handler.h"
 #include "cmd/restart.h"
+#include "cmd/restore.h"
 #include "cmd/set.h"
 #include "cmd/shell.h"
+#include "cmd/snapshot.h"
 #include "cmd/start.h"
 #include "cmd/stop.h"
 #include "cmd/suspend.h"
@@ -42,25 +47,44 @@
 #include "cmd/unalias.h"
 #include "cmd/version.h"
 
-#include <algorithm>
-
 #include <multipass/cli/argparser.h>
 #include <multipass/cli/client_common.h>
+#include <multipass/cli/client_platform.h>
+#include <multipass/constants.h>
 #include <multipass/logging/log.h>
 #include <multipass/platform.h>
+#include <multipass/settings/settings.h>
+#include <multipass/top_catch_all.h>
+
+#include <scope_guard.hpp>
+
+#include <algorithm>
+#include <memory>
 
 namespace mp = multipass;
 namespace mpl = multipass::logging;
 
+namespace
+{
+auto make_handler_unregisterer(mp::SettingsHandler* handler)
+{
+    return sg::make_scope_guard([handler]() noexcept {
+        mp::top_catch_all("client", [handler] {
+            MP_SETTINGS.unregister_handler(handler); // trust me clang-format
+        });
+    });
+}
+} // namespace
+
 mp::Client::Client(ClientConfig& config)
-    : rpc_channel{mp::client::make_channel(config.server_address, config.cert_provider.get())},
-      stub{mp::Rpc::NewStub(rpc_channel)},
+    : stub{mp::Rpc::NewStub(mp::client::make_channel(config.server_address, *config.cert_provider))},
       term{config.term},
       aliases{config.term}
 {
     add_command<cmd::Alias>(aliases);
     add_command<cmd::Aliases>(aliases);
-    add_command<cmd::Launch>();
+    add_command<cmd::Authenticate>();
+    add_command<cmd::Launch>(aliases);
     add_command<cmd::Purge>(aliases);
     add_command<cmd::Exec>(aliases);
     add_command<cmd::Find>();
@@ -70,10 +94,12 @@ mp::Client::Client(ClientConfig& config)
     add_command<cmd::List>();
     add_command<cmd::Networks>();
     add_command<cmd::Mount>();
+    add_command<cmd::Prefer>(aliases);
     add_command<cmd::Recover>();
-    add_command<cmd::Register>();
+    add_command<cmd::Restore>();
     add_command<cmd::Set>();
     add_command<cmd::Shell>();
+    add_command<cmd::Snapshot>();
     add_command<cmd::Start>();
     add_command<cmd::Stop>();
     add_command<cmd::Suspend>();
@@ -83,8 +109,11 @@ mp::Client::Client(ClientConfig& config)
     add_command<cmd::Delete>(aliases);
     add_command<cmd::Umount>();
     add_command<cmd::Version>();
+    add_command<cmd::Clone>();
 
     sort_commands();
+
+    MP_CLIENT_PLATFORM.enable_ansi_escape_chars();
 }
 
 void mp::Client::sort_commands()
@@ -102,14 +131,29 @@ int mp::Client::run(const QStringList& arguments)
     ArgParser parser(arguments, commands, term->cout(), term->cerr());
     parser.setApplicationDescription(description);
 
+    mp::ReturnCode ret = mp::ReturnCode::Ok;
     ParseCode parse_status = parser.parse(aliases);
 
+    auto verbosity = parser.verbosityLevel(); // try to respect requested verbosity, even if parsing failed
     if (!mpl::get_logger())
-        mp::client::set_logger(mpl::level_from(parser.verbosityLevel())); // we need logging for...
-    mp::client::pre_setup(); // ... something we want to do even if the command was wrong
+        mp::client::set_logger(mpl::level_from(verbosity));
 
-    const auto ret =
-        parse_status == ParseCode::Ok ? parser.chosenCommand()->run(&parser) : parser.returnCodeFrom(parse_status);
+    {
+        auto daemon_settings_prefix = QString{daemon_settings_root} + ".";
+        auto* handler = MP_SETTINGS.register_handler(
+            std::make_unique<RemoteSettingsHandler>(std::move(daemon_settings_prefix), *stub, term, verbosity));
+        auto handler_unregisterer = make_handler_unregisterer(handler); // remove handler before its dependencies expire
+
+        try
+        {
+            ret = parse_status == ParseCode::Ok ? parser.chosenCommand()->run(&parser)
+                                                : parser.returnCodeFrom(parse_status);
+        }
+        catch (const RemoteHandlerException& e)
+        {
+            ret = mp::cmd::standard_failure_handler_for(parser.chosenCommand()->name(), term->cerr(), e.get_status());
+        }
+    }
 
     mp::client::post_setup();
 

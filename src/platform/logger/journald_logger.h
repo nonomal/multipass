@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2018-2022 Canonical, Ltd.
+ * Copyright (C) Canonical, Ltd.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -18,13 +18,13 @@
 #ifndef MULTIPASS_JOURNALD_LOGGER_H
 #define MULTIPASS_JOURNALD_LOGGER_H
 
-#include <multipass/logging/logger.h>
+#include "linux_logger.h"
 
 namespace multipass
 {
 namespace logging
 {
-class JournaldLogger : public Logger
+class JournaldLogger : public LinuxLogger
 {
 public:
     explicit JournaldLogger(Level level);

@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2017-2022 Canonical, Ltd.
+ * Copyright (C) Canonical, Ltd.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -24,6 +24,7 @@
 
 #include <chrono>
 #include <memory>
+#include <mutex>
 #include <string>
 
 namespace multipass
@@ -32,21 +33,36 @@ class SSHKeyProvider;
 class SSHSession
 {
 public:
-    SSHSession(const std::string& host, int port, const std::chrono::milliseconds timeout = std::chrono::seconds(1));
-    SSHSession(const std::string& host, int port, const std::string& ssh_username, const SSHKeyProvider& key_provider,
+    SSHSession(const std::string& host,
+               int port,
+               const std::string& ssh_username,
+               const SSHKeyProvider& key_provider,
                const std::chrono::milliseconds timeout = std::chrono::seconds(20));
 
-    SSHProcess exec(const std::string& cmd);
+    // just being explicit (unique_ptr member already caused these to be deleted)
+    SSHSession(const SSHSession&) = delete;
+    SSHSession& operator=(const SSHSession&) = delete;
 
-    void force_shutdown();
-    operator ssh_session() const;
+    // we should be able to move just fine though, but we need to lock
+    SSHSession(SSHSession&&);
+    SSHSession& operator=(SSHSession&&);
+
+    ~SSHSession();
+
+    SSHProcess exec(const std::string& cmd, bool whisper = false); /* locks the session until the process is destroyed
+                                                                      or exit_code is called! */
+    [[nodiscard]] bool is_connected() const;
+
+    operator ssh_session(); // careful, not thread safe
+    void force_shutdown();  // careful, not thread safe
 
 private:
-    SSHSession(const std::string& host, int port, const std::string& ssh_username, const SSHKeyProvider* key_provider);
-    SSHSession(const std::string& host, int port, const std::string& ssh_username, const SSHKeyProvider* key_provider,
-               const std::chrono::milliseconds timeout = std::chrono::seconds(20));
+    SSHSession(SSHSession&&, std::unique_lock<std::mutex> lock);
+
     void set_option(ssh_options_e type, const void* value);
+
     std::unique_ptr<ssh_session_struct, void (*)(ssh_session)> session;
+    mutable std::mutex mut;
 };
 } // namespace multipass
 #endif // MULTIPASS_SSH_H

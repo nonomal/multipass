@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2017-2022 Canonical, Ltd.
+ * Copyright (C) Canonical, Ltd.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -16,13 +16,15 @@
  */
 
 #include "start.h"
+
 #include "animated_spinner.h"
+#include "common_callbacks.h"
 #include "common_cli.h"
 
 #include <multipass/cli/argparser.h>
 #include <multipass/constants.h>
 #include <multipass/exceptions/cmd_exceptions.h>
-#include <multipass/settings.h>
+#include <multipass/settings/settings.h>
 #include <multipass/timer.h>
 
 #include <fmt/ostream.h>
@@ -33,7 +35,6 @@
 
 namespace mp = multipass;
 namespace cmd = multipass::cmd;
-using RpcMethod = mp::Rpc::Stub;
 
 using namespace std::chrono_literals;
 
@@ -105,16 +106,6 @@ mp::ReturnCode cmd::Start::run(mp::ArgParser* parser)
         return standard_failure_handler_for(name(), cerr, status, details);
     };
 
-    auto streaming_callback = [this, &spinner](mp::StartReply& reply) {
-        if (!reply.log_line().empty())
-        {
-            spinner.print(cerr, reply.log_line());
-        }
-
-        spinner.stop();
-        spinner.start(reply.reply_message());
-    };
-
     request.set_verbosity_level(parser->verbosityLevel());
 
     std::unique_ptr<multipass::utils::Timer> timer;
@@ -127,6 +118,7 @@ mp::ReturnCode cmd::Start::run(mp::ArgParser* parser)
     }
 
     ReturnCode return_code;
+    auto streaming_callback = make_iterative_spinner_callback<StartRequest, StartReply>(spinner, *term);
     do
     {
         spinner.start(instance_action_message_for(request.instance_names(), "Starting "));
@@ -160,7 +152,7 @@ mp::ParseCode cmd::Start::parse_args(mp::ArgParser* parser)
             ? std::make_pair(QString{"Names of instances to start."}, QString{"<name> [<name> ...]"})
             : std::make_pair(QString{"Names of instances to start. If omitted, and without the --all option, '%1' (the "
                                      "configured primary instance name) will be assumed. If '%1' does not exist but is "
-                                     "included in a successful start command either implicitly or explicitly), it is "
+                                     "included in a successful start command (either implicitly or explicitly), it is "
                                      "launched automatically (see `launch` for more info)."}
                                  .arg(petenv_name),
                              QString{"[<name> ...]"});

@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2021-2022 Canonical, Ltd.
+ * Copyright (C) Canonical, Ltd.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -31,7 +31,7 @@ namespace multipass::test
 class MockQNetworkAccessManager : public QNetworkAccessManager
 {
 public:
-    MOCK_METHOD3(createRequest, QNetworkReply*(Operation, const QNetworkRequest&, QIODevice*));
+    MOCK_METHOD(QNetworkReply*, createRequest, (Operation, const QNetworkRequest&, QIODevice*), (override));
 };
 
 class MockQNetworkReply : public QNetworkReply
@@ -42,12 +42,12 @@ public:
         open(QIODevice::ReadOnly);
     };
 
-    MOCK_METHOD2(readData, qint64(char*, qint64));
+    MOCK_METHOD(qint64, readData, (char*, qint64), (override));
 
     void abort_operation()
     {
         setError(OperationCanceledError, "Operation canceled");
-        emit error(OperationCanceledError);
+        emit errorOccurred(OperationCanceledError);
 
         setFinished(true);
         emit finished();
@@ -69,7 +69,7 @@ public:
     }
 
 public Q_SLOTS:
-    MOCK_METHOD0(abort, void());
+    MOCK_METHOD(void, abort, (), (override));
 };
 
 class MockNetworkManagerFactory : public NetworkManagerFactory
@@ -77,7 +77,7 @@ class MockNetworkManagerFactory : public NetworkManagerFactory
 public:
     using NetworkManagerFactory::NetworkManagerFactory;
 
-    MOCK_CONST_METHOD1(make_network_manager, std::unique_ptr<QNetworkAccessManager>(const Path&));
+    MOCK_METHOD(std::unique_ptr<QNetworkAccessManager>, make_network_manager, (const Path&), (const, override));
 
     MP_MOCK_SINGLETON_BOILERPLATE(MockNetworkManagerFactory, NetworkManagerFactory);
 };

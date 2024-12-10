@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2017-2022 Canonical, Ltd.
+ * Copyright (C) Canonical, Ltd.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -23,7 +23,6 @@
 
 namespace mp = multipass;
 namespace cmd = multipass::cmd;
-using RpcMethod = mp::Rpc::Stub;
 
 mp::ReturnCode cmd::Find::run(mp::ArgParser* parser)
 {
@@ -71,13 +70,15 @@ mp::ParseCode cmd::Find::parse_args(mp::ArgParser* parser)
                                   "Ubuntu release version, codename or alias.",
                                   "[<remote:>][<string>]");
     QCommandLineOption unsupportedOption("show-unsupported", "Show unsupported cloud images as well");
-    parser->addOptions({unsupportedOption});
-
+    QCommandLineOption imagesOnlyOption("only-images", "Show only images");
+    QCommandLineOption blueprintsOnlyOption("only-blueprints", "Show only blueprints");
     QCommandLineOption formatOption(
         "format", "Output list in the requested format.\nValid formats are: table (default), json, csv and yaml",
         "format", "table");
-
-    parser->addOption(formatOption);
+    const QCommandLineOption force_manifest_network_download("force-update",
+                                                             "Force the image information to update from the network");
+    parser->addOptions(
+        {unsupportedOption, imagesOnlyOption, blueprintsOnlyOption, formatOption, force_manifest_network_download});
 
     auto status = parser->commandParse(this);
 
@@ -86,10 +87,25 @@ mp::ParseCode cmd::Find::parse_args(mp::ArgParser* parser)
         return status;
     }
 
+    if (parser->isSet(imagesOnlyOption) && parser->isSet(blueprintsOnlyOption))
+    {
+        cerr << "Specify one of \"--only-images\", \"--only-blueprints\" or omit to fetch both\n";
+        return ParseCode::CommandLineError;
+    }
+
+    if (parser->isSet(force_manifest_network_download) && parser->isSet(blueprintsOnlyOption))
+    {
+        cerr << "Force updating blueprints is not currently supported\n";
+        return ParseCode::CommandLineError;
+    }
+
+    request.set_show_images(!parser->isSet(blueprintsOnlyOption));
+    request.set_show_blueprints(!parser->isSet(imagesOnlyOption));
+
     if (parser->positionalArguments().count() > 1)
     {
         cerr << "Wrong number of arguments\n";
-        status = ParseCode::CommandLineError;
+        return ParseCode::CommandLineError;
     }
     else if (parser->positionalArguments().count() == 1)
     {
@@ -112,10 +128,8 @@ mp::ParseCode cmd::Find::parse_args(mp::ArgParser* parser)
         }
     }
 
-    if (parser->isSet(unsupportedOption))
-    {
-        request.set_allow_unsupported(true);
-    }
+    request.set_allow_unsupported(parser->isSet(unsupportedOption));
+    request.set_force_manifest_network_download(parser->isSet(force_manifest_network_download));
 
     status = handle_format_option(parser, &chosen_formatter, cerr);
 

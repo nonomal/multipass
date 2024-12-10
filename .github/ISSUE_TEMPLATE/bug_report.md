@@ -2,7 +2,7 @@
 name: Bug report
 about: Create a report to help us improve
 title: ''
-labels: bug
+labels: bug, needs triage
 assignees: ''
 
 ---
@@ -24,7 +24,8 @@ Please provide logs from the daemon, see [accessing logs](https://multipass.run/
 **Additional info**
  - OS: [e.g. macOS 10.15]
 - `multipass version`
-- `multipass info --all`
+- `multipass info`
+- `multipass get local.driver`
 
 **Additional context**
 Add any other context about the problem here.

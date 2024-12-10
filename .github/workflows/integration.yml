@@ -18,7 +18,6 @@ jobs:
 
     outputs:
       matrix: ${{ steps.set-matrix.outputs.matrix }}
-      bors-matrix: ${{ steps.set-matrix.outputs.bors-matrix }}
 
     steps:
     - name: Determine job matrix
@@ -34,11 +33,8 @@ jobs:
         fi
 
         if [ -n '${{ github.event.inputs.mac-x86-package }}' ]; then
-          MATRIX+='{"os": "macOS", "vm": "macos-10.14", "driver": "hyperkit", "arch": "x86_64" }'
-          MATRIX+='{"os": "macOS", "vm": "macos-10.15", "driver": "hyperkit", "arch": "x86_64" }'
-          MATRIX+='{"os": "macOS", "vm": "macos-10.15", "driver": "qemu", "arch": "x86_64" }'
-          MATRIX+='{"os": "macOS", "vm": "macos-11", "driver": "hyperkit", "arch": "x86_64" }'
           MATRIX+='{"os": "macOS", "vm": "macos-11", "driver": "qemu", "arch": "x86_64" }'
+          MATRIX+='{"os": "macOS", "vm": "macos-12", "driver": "qemu", "arch": "x86_64" }'
         fi
 
         if [ -n '${{ github.event.inputs.mac-arm-package }}' ]; then
@@ -47,9 +43,10 @@ jobs:
 
         if [ -n '${{ github.event.inputs.win-package }}' ]; then
           MATRIX+='{"os": "Windows",  "vm": "windows-10", "driver": "hyperv"}'
+          MATRIX+='{"os": "Windows",  "vm": "windows-11", "driver": "hyperv"}'
         fi
 
-        echo "${MATRIX}" | jq -cs '{"include": . }' | awk '{ print "::set-output name=matrix::" $0 }'
+        echo "${MATRIX}" | jq -cs '{"include": . }' | awk '{ print "matrix=" $0 }' >> $GITHUB_OUTPUT
 
   CI:
     needs: GetMatrix
@@ -57,7 +54,7 @@ jobs:
     runs-on: testflinger
 
     # Windows is pretty slow unfortunately.
-    timeout-minutes: 60
+    timeout-minutes: 120
 
     strategy:
       matrix: ${{ fromJSON(needs.GetMatrix.outputs.matrix) }}
@@ -67,25 +64,25 @@ jobs:
 
     steps:
     - name: Write the testflinger job
-      uses: DamianReeves/write-file-action@v1.0
+      uses: DamianReeves/write-file-action@v1.3
       with:
         path: ${{ env.TESTFLINGER_FILE }}
         write-mode: overwrite
         contents: |
-          job_queue: ${{ matrix.os == 'macOS' && matrix.arch == 'arm64' && 'macos-arm' || 'vmware-fusion' }}
+          job_queue: ${{ matrix.os == 'macOS' && matrix.arch == 'arm64' && 'macos-arm' || matrix.vm }}
           output_timeout: 2400
           provision_data:
-            ${{ matrix.vm && format('vmx: /Users/michal/Virtual Machines.localized/{0}.vmwarevm/{0}.vmx', matrix.vm) || '' }}
+            ${{ matrix.vm && format('vmx: /Users/cibot/Virtual Machines.localized/{0}.vmwarevm/{0}.vmx', matrix.vm) || '' }}
             snapshot: Testflinger
-            ${{ matrix.os == 'Linux' && 'image_url: http://cloud-images.ubuntu.com/releases/groovy/release/ubuntu-20.10-server-cloudimg-amd64.img' || '' }}
+            ${{ matrix.os == 'Linux' && 'image_url: https://cloud-images.ubuntu.com/releases/jammy/release/ubuntu-22.04-server-cloudimg-amd64.img' || '' }}
+            ${{ matrix.vm == 'windows-10' && 'username: ieuser' || '' }}
+            ${{ matrix.vm == 'windows-11' && 'username: user' || '' }}
             vmx_config:
-              ${{ matrix.os == 'Linux' && 'memsize: 2048' || '' }}
-              memsize: 2048
+              memsize: 4096
               vhv.enable: true
               vpmc.enable: true
 
           test_data:
-            ${{ matrix.os == 'Windows' && 'test_username: user' || '' }}
             test_cmds: |
               set -xeuo pipefail
 
@@ -130,6 +127,11 @@ jobs:
                   [ $RC -eq 0 ] || _run sudo journalctl -u snap.multipass*
                 elif [ '${{ matrix.os }}' == 'macOS' ]; then
                   [ $RC -eq 0 ] || _run sudo cat /Library/Logs/Multipass/multipassd.log
+                  # Authenticate the root user
+                  _run $MP set local.passphrase=foobar || true
+                  # Sleep 20 seconds to allow daemon to restart
+                  sleep 20
+                  _run sudo $MP authenticate foobar || true
                   ( echo y; echo y ) | _run sudo PATH=/bin:/usr/local/bin /bin/sh "/Library/Application\\ Support/com.canonical.multipass/uninstall.sh" || true
                   _run sudo rm -rf /Library/Logs/Multipass
                 fi
@@ -140,6 +142,23 @@ jobs:
                 _run powershell -noprofile -noninteractive -command ${{ '${{@}}' }}
               }}
 
+              function _install() {{
+                PACKAGE="$1"
+
+                if [ '${{ matrix.os }}' == 'Linux' ]; then
+                  # Give snapd time to settle
+                  _retry 5 30 _run sudo sh -c "snap\ list\ multipass && sudo snap refresh multipass --channel ${PACKAGE} || sudo snap install multipass --channel ${PACKAGE}"
+
+                elif [ '${{ matrix.os }}' == 'macOS' ]; then
+                  _run curl --location --output multipass.pkg "${PACKAGE}"
+                  _run sudo installer -dumplog -target / -pkg multipass.pkg
+
+                elif [ '${{ matrix.os }}' == 'Windows' ]; then
+                  _ps "(New-Object System.Net.WebClient).DownloadFile('${PACKAGE}', 'multipass-installer.exe')"
+                  _run .\\multipass-installer.exe /S
+                fi
+              }}
+
               if [ '${{ matrix.os }}' == 'Linux' ]; then
                 OVERRIDE_CONF="/etc/systemd/system/snap.multipass.multipassd.service.d/override.conf"
                 _run sudo mkdir -p $( dirname ${OVERRIDE_CONF} )
@@ -148,21 +167,20 @@ jobs:
               ExecStart=
               ExecStart=/usr/bin/snap run multipass.multipassd --verbosity trace
               EOF
-                # Give snapd time to settle
-                _retry 5 30 _run sudo snap install multipass --channel ${{ github.event.inputs.snap-channel }}
+                _install  ${{ github.event.inputs.snap-channel }}
 
               elif [ '${{ matrix.os }}' == 'macOS' ]; then
                 ( echo y; echo y ) | _run sudo PATH=/bin:/usr/local/bin /bin/sh "/Library/Application\\ Support/com.canonical.multipass/uninstall.sh" || true
-                _run curl --location --output multipass.pkg ${{ matrix.arch == 'arm64' && github.event.inputs.mac-arm-package || github.event.inputs.mac-x86-package }}
-                _run sudo installer -dumplog -target / -pkg multipass.pkg
+                _install  ${{ matrix.arch == 'arm64' && github.event.inputs.mac-arm-package || github.event.inputs.mac-x86-package }}
 
               elif [ '${{ matrix.os }}' == 'Windows' ]; then
-                _ps "(New-Object System.Net.WebClient).DownloadFile('${{ github.event.inputs.win-package }}', 'multipass-installer.exe')"
-                _run .\\multipass-installer.exe /S
+                _install ${{ github.event.inputs.win-package }}
 
-                _ps "Enable-WindowsOptionalFeature -Online -FeatureName Microsoft-Hyper-V -All -NoRestart"
-                _ps "Restart-Computer -Force"
-                sleep 60
+                if [ '${{ matrix.driver }}' == 'hyperv' ]; then
+                  _ps "Set-Variable ProgressPreference SilentlyContinue; Enable-WindowsOptionalFeature -Online -FeatureName Microsoft-Hyper-V -All -NoRestart"
+                  _ps "Restart-Computer -Force"
+                  sleep 120
+                fi
               fi
 
               if [ '${{ matrix.driver }}' == 'lxd' ]; then
@@ -171,30 +189,38 @@ jobs:
               fi
 
               _retry_grep 12 5 "multipassd" _run $MP version
-              _run ${{ matrix.os != 'Windows' && 'sudo' || '' }} $MP set local.driver=${{ matrix.driver }}
+              _run $MP set local.driver=${{ matrix.driver }}
 
-              # Give multipassd time to settle (#1995)
+              # Wait for the daemon to restart
+              _retry_grep 12 5 '^${{ matrix.driver }}' _run $MP get local.driver
+
+              # and for the streams to flow down
               _retry_grep 12 5 "\w,lts\W" _run $MP find
-              sleep 10
 
+              # Launch and test primary
               _run $MP start --timeout 1200
 
               _run $MP list
 
               _run $MP exec primary -- uname -a
 
-    - name: Submit the job
-      id: submit
-      run: |
-        JOB_ID=$( testflinger-cli submit --quiet ${TESTFLINGER_FILE} )
-        echo "::set-output name=job-id::${JOB_ID}"
+    - name: Run the job
+      id: run
+      uses: nick-fields/retry@v3
+      with:
+        timeout_minutes: 60
+        max_attempts: 2
+        command: |
+          JOB_ID=$( testflinger-cli submit --quiet ${TESTFLINGER_FILE} )
+          echo "${JOB_ID}" > testflinger_job
 
-    - name: Poll the job and get the result
-      run: |
-        testflinger-cli poll "${{ steps.submit.outputs.job-id }}"
-        [ "$( testflinger-cli results ${{ steps.submit.outputs.job-id}} | jq -r .test_status )" -eq 0 ]
+          testflinger-cli poll "${JOB_ID}"
+          [ "$( testflinger-cli results ${JOB_ID} | jq -r .test_status )" == "0" ]
+
+        on_retry_command: |
+          testflinger-cli cancel "$( cat testflinger_job )"
 
     - name: Cancel the job
-      if: ${{ cancelled() && steps.submit.outputs.job-id != '' }}
+      if: ${{ cancelled() }}
       run: |
-       testflinger-cli cancel "${{ steps.submit.outputs.job-id }}"
+        if [ -f testflinger_job ]; then testflinger-cli cancel "$( cat testflinger_job )"; fi

@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2021-2022 Canonical, Ltd.
+ * Copyright (C) Canonical, Ltd.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -50,7 +50,7 @@ struct URLDownloader : public Test
     mpt::MockNetworkManagerFactory::GuardedMock attr{mpt::MockNetworkManagerFactory::inject()};
     mpt::MockNetworkManagerFactory* mock_network_manager_factory{attr.first};
     std::unique_ptr<NiceMock<mpt::MockQNetworkAccessManager>> mock_network_access_manager;
-    const QUrl fake_url{"http://a.fake.url"};
+    const QUrl fake_url{"https://a.fake.url"};
     mpt::MockLogger::Scope logger_scope = mpt::MockLogger::inject();
 };
 } // namespace
@@ -113,13 +113,19 @@ TEST_F(URLDownloader, simpleDownloadNetworkTimeoutTriesCache)
             return mock_reply_cache;
         });
 
-    logger_scope.mock_logger->screen_logs(mpl::Level::trace);
+    logger_scope.mock_logger->screen_logs(mpl::Level::error);
+
+    // Add expectations for the new debug log and the warning log
+    EXPECT_CALL(*logger_scope.mock_logger,
+                log(mpl::Level::debug, _, Property(&multipass::logging::CString::c_str, StartsWith("Qt error"))));
+
+    logger_scope.mock_logger->expect_log(
+        mpl::Level::warning,
+        fmt::format("Failed to get {}: Operation canceled - trying cache.", fake_url.toString()));
     logger_scope.mock_logger->expect_log(mpl::Level::trace,
                                          fmt::format("Found {} in cache: true", fake_url.toString()));
-    logger_scope.mock_logger->expect_log(
-        mpl::Level::warning, fmt::format("Error getting {}: Network timeout - trying cache.", fake_url.toString()));
 
-    mp::URLDownloader downloader(cache_dir.path(), 1ms);
+    mp::URLDownloader downloader(cache_dir.path(), 10ms);
 
     auto downloaded_data = downloader.download(fake_url);
 
@@ -138,7 +144,7 @@ TEST_F(URLDownloader, simpleDownloadProxyAuthenticationRequiredAborts)
         return mock_reply;
     });
 
-    mp::URLDownloader downloader(cache_dir.path(), 1ms);
+    mp::URLDownloader downloader(cache_dir.path(), 10ms);
 
     MP_EXPECT_THROW_THAT(downloader.download(fake_url), mp::AbortedDownloadException,
                          mpt::match_what(StrEq("Proxy authorization required")));
@@ -155,7 +161,7 @@ TEST_F(URLDownloader, simpleDownloadAbortAllStopsDownload)
         return mock_reply;
     });
 
-    mp::URLDownloader downloader(cache_dir.path(), 1ms);
+    mp::URLDownloader downloader(cache_dir.path(), 10ms);
 
     downloader.abort_all_downloads();
 
@@ -200,7 +206,7 @@ TEST_F(URLDownloader, fileDownloadNoErrorHasExpectedResults)
     logger_scope.mock_logger->expect_log(mpl::Level::trace,
                                          fmt::format("Found {} in cache: false", fake_url.toString()));
 
-    mp::URLDownloader downloader(cache_dir.path(), 1ms);
+    mp::URLDownloader downloader(cache_dir.path(), 10ms);
 
     mpt::TempDir file_dir;
     QString download_file{file_dir.path() + "/foo.txt"};
@@ -248,13 +254,17 @@ TEST_F(URLDownloader, fileDownloadErrorTriesCache)
 
     auto progress_monitor = [](auto...) { return true; };
 
-    logger_scope.mock_logger->screen_logs(mpl::Level::trace);
+    logger_scope.mock_logger->screen_logs(mpl::Level::error);
     logger_scope.mock_logger->expect_log(mpl::Level::trace,
                                          fmt::format("Found {} in cache: true", fake_url.toString()));
     logger_scope.mock_logger->expect_log(
-        mpl::Level::warning, fmt::format("Error getting {}: Network timeout - trying cache.", fake_url.toString()));
+        mpl::Level::warning,
+        fmt::format("Failed to get {}: Operation canceled - trying cache.", fake_url.toString()));
 
-    mp::URLDownloader downloader(cache_dir.path(), 1ms);
+    EXPECT_CALL(*logger_scope.mock_logger,
+                log(mpl::Level::debug, _, Property(&multipass::logging::CString::c_str, StartsWith("Qt error"))));
+
+    mp::URLDownloader downloader(cache_dir.path(), 10ms);
 
     mpt::TempDir file_dir;
     QString download_file{file_dir.path() + "/foo.txt"};
@@ -282,7 +292,7 @@ TEST_F(URLDownloader, fileDownloadMonitorReturnFalseAborts)
 
     auto progress_monitor = [](auto...) { return false; };
 
-    mp::URLDownloader downloader(cache_dir.path(), 1ms);
+    mp::URLDownloader downloader(cache_dir.path(), 10ms);
 
     mpt::TempDir file_dir;
     QString download_file{file_dir.path() + "/foo.txt"};
@@ -318,7 +328,7 @@ TEST_F(URLDownloader, fileDownloadZeroBytesReceivedDoesNotCallMonitor)
     logger_scope.mock_logger->expect_log(mpl::Level::trace,
                                          fmt::format("Found {} in cache: false", fake_url.toString()));
 
-    mp::URLDownloader downloader(cache_dir.path(), 1ms);
+    mp::URLDownloader downloader(cache_dir.path(), 10ms);
 
     mpt::TempDir file_dir;
     QString download_file{file_dir.path() + "/foo.txt"};
@@ -344,7 +354,7 @@ TEST_F(URLDownloader, fileDownloadAbortAllStopDownload)
 
     auto progress_monitor = [](auto...) { return true; };
 
-    mp::URLDownloader downloader(cache_dir.path(), 1ms);
+    mp::URLDownloader downloader(cache_dir.path(), 10ms);
     downloader.abort_all_downloads();
 
     mpt::TempDir file_dir;
@@ -388,7 +398,7 @@ TEST_F(URLDownloader, fileDownloadUnknownBytesSetToQueriedSize)
     logger_scope.mock_logger->expect_log(mpl::Level::trace,
                                          fmt::format("Found {} in cache: false", fake_url.toString()));
 
-    mp::URLDownloader downloader(cache_dir.path(), 1ms);
+    mp::URLDownloader downloader(cache_dir.path(), 10ms);
 
     mpt::TempDir file_dir;
     QString download_file{file_dir.path() + "/foo.txt"};
@@ -417,11 +427,29 @@ TEST_F(URLDownloader, fileDownloadTimeoutDoesNotWriteFile)
 
     auto progress_monitor = [](auto...) { return true; };
 
-    logger_scope.mock_logger->screen_logs(mpl::Level::warning);
-    logger_scope.mock_logger->expect_log(
-        mpl::Level::warning, fmt::format("Error getting {}: Network timeout - trying cache.", fake_url.toString()));
+    logger_scope.mock_logger->screen_logs(mpl::Level::error);
 
-    mp::URLDownloader downloader(cache_dir.path(), 1ms);
+    // Expect warning log for the first failed attempt
+    EXPECT_CALL(*logger_scope.mock_logger,
+                log(mpl::Level::warning,
+                    _,
+                    Property(&multipass::logging::CString::c_str,
+                             HasSubstr(fmt::format("Failed to get {}: Operation canceled - trying cache.",
+                                                   fake_url.toString())))));
+
+    // Expect error log for the second failed attempt
+    EXPECT_CALL(*logger_scope.mock_logger,
+                log(mpl::Level::error,
+                    _,
+                    Property(&multipass::logging::CString::c_str,
+                             HasSubstr(fmt::format("Failed to get {}: Operation canceled", fake_url.toString())))));
+
+    // Expect two debug logs for each failure
+    EXPECT_CALL(*logger_scope.mock_logger,
+                log(mpl::Level::debug, _, Property(&multipass::logging::CString::c_str, StartsWith("Qt error"))))
+        .Times(2);
+
+    mp::URLDownloader downloader(cache_dir.path(), 10ms);
 
     mpt::TempDir file_dir;
     QString download_file{file_dir.path() + "/foo.txt"};
@@ -464,7 +492,7 @@ TEST_F(URLDownloader, fileDownloadWriteFailsLogsErrorAndThrows)
     logger_scope.mock_logger->screen_logs(mpl::Level::error);
     logger_scope.mock_logger->expect_log(mpl::Level::error, "error writing image:");
 
-    mp::URLDownloader downloader(cache_dir.path(), 1ms);
+    mp::URLDownloader downloader(cache_dir.path(), 10ms);
 
     mpt::TempDir file_dir;
     QString download_file{file_dir.path() + "/foo.txt"};
@@ -499,11 +527,15 @@ TEST_F(URLDownloader, lastModifiedHeaderTimeoutThrows)
 
     EXPECT_CALL(*mock_network_access_manager, createRequest(_, _, _)).WillOnce(Return(mock_reply));
 
-    logger_scope.mock_logger->screen_logs(mpl::Level::warning);
+    logger_scope.mock_logger->screen_logs(mpl::Level::error);
     logger_scope.mock_logger->expect_log(
-        mpl::Level::warning, fmt::format("Cannot retrieve headers for {}: Network timeout", fake_url.toString()));
+        mpl::Level::error,
+        fmt::format("Cannot retrieve headers for {}: Operation canceled", fake_url.toString()));
 
-    mp::URLDownloader downloader(cache_dir.path(), 1ms);
+    // Expectation for debug log
+    EXPECT_CALL(*logger_scope.mock_logger,
+                log(mpl::Level::debug, _, Property(&multipass::logging::CString::c_str, StartsWith("Qt error"))));
+    mp::URLDownloader downloader(cache_dir.path(), 10ms);
 
     EXPECT_THROW(downloader.last_modified(fake_url), mp::DownloadException);
 }
@@ -521,11 +553,53 @@ TEST_F(URLDownloader, lastModifiedHeaderErrorThrows)
         return mock_reply;
     });
 
-    logger_scope.mock_logger->screen_logs(mpl::Level::warning);
+    logger_scope.mock_logger->screen_logs(mpl::Level::error);
     logger_scope.mock_logger->expect_log(
-        mpl::Level::warning, fmt::format("Cannot retrieve headers for {}: {}", fake_url.toString(), error_msg));
+        mpl::Level::error,
+        fmt::format("Cannot retrieve headers for {}: {}", fake_url.toString(), error_msg));
+
+    // Expectation for debug log
+    EXPECT_CALL(*logger_scope.mock_logger,
+                log(mpl::Level::debug, _, Property(&multipass::logging::CString::c_str, StartsWith("Qt error"))));
 
     mp::URLDownloader downloader(cache_dir.path(), 1s);
 
     EXPECT_THROW(downloader.last_modified(fake_url), mp::DownloadException);
+}
+
+struct URLConverter : public URLDownloader
+{
+    template <class Callable>
+    decltype(auto) test_function_converts_url(Callable&& function)
+    {
+        mpt::MockQNetworkReply* mock_reply = new mpt::MockQNetworkReply();
+        QTimer::singleShot(0, [&mock_reply] { mock_reply->finished(); });
+
+        ON_CALL(*mock_network_access_manager, createRequest(_, _, _)).WillByDefault(Return(mock_reply));
+        ON_CALL(*mock_reply, readData(_, _)).WillByDefault(Return(0));
+
+        EXPECT_CALL(*mock_network_access_manager, createRequest(_, Property(&QNetworkRequest::url, Eq(https_url)), _))
+            .WillRepeatedly(Return(mock_reply));
+
+        return function(http_url);
+    }
+
+    const QUrl http_url{"http://a.url.net"};
+    const QUrl https_url{"https://a.url.net"};
+};
+
+TEST_F(URLConverter, downloadHttpUrlBecomesHttps)
+{
+    test_function_converts_url([this](const QUrl& url) {
+        mp::URLDownloader downloader(cache_dir.path(), 1s);
+        return downloader.download(url);
+    });
+}
+
+TEST_F(URLConverter, lastModifiedHttpUrlBecomesHttps)
+{
+    test_function_converts_url([this](const QUrl& url) {
+        mp::URLDownloader downloader(cache_dir.path(), 1s);
+        downloader.last_modified(url);
+    });
 }

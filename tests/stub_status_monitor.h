@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2017-2022 Canonical, Ltd.
+ * Copyright (C) Canonical, Ltd.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -27,7 +27,7 @@ namespace test
 struct StubVMStatusMonitor : public multipass::VMStatusMonitor
 {
     void on_resume() override{};
-    void on_stop() override{};
+    ;
     void on_shutdown() override{};
     void on_suspend() override{};
     void on_restart(const std::string& name) override{};

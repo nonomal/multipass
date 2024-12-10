@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2017-2022 Canonical, Ltd.
+ * Copyright (C) Canonical, Ltd.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -63,6 +63,11 @@ int mp::platform::Platform::chmod(const char* path, unsigned int mode) const
     return ::chmod(path, mode);
 }
 
+bool mp::platform::Platform::set_permissions(const mp::Path path, const QFileDevice::Permissions permissions) const
+{
+    return QFile::setPermissions(path, permissions);
+}
+
 bool mp::platform::Platform::symlink(const char* target, const char* link, bool is_dir) const
 {
     return ::symlink(target, link) == 0;
@@ -77,6 +82,11 @@ int mp::platform::Platform::utime(const char* path, int atime, int mtime) const
     tv[1].tv_usec = 0;
 
     return ::lutimes(path, tv);
+}
+
+QString mp::platform::Platform::get_username() const
+{
+    return {};
 }
 
 std::string mp::platform::Platform::alias_path_message() const
@@ -124,6 +134,11 @@ void mp::platform::Platform::set_server_socket_restrictions(const std::string& s
     if (chmod(socket_path.c_str(), mode) == -1)
         throw std::runtime_error(
             fmt::format("Could not set permissions for the multipass socket: {}", strerror(errno)));
+}
+
+QString mp::platform::Platform::multipass_storage_location() const
+{
+    return mp::utils::get_multipass_storage();
 }
 
 int mp::platform::symlink_attr_from(const char* path, sftp_attributes_struct* attr)

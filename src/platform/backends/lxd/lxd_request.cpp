@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2020-2022 Canonical, Ltd.
+ * Copyright (C) Canonical, Ltd.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -34,6 +34,25 @@ namespace
 {
 constexpr auto request_category = "lxd request";
 
+void setup_lxd_url(QUrl& inout_url)
+{
+    if (inout_url.host().isEmpty())
+        inout_url.setHost(mp::lxd_project_name);
+
+    const QString project_query_string = QString("project=%1").arg(mp::lxd_project_name);
+    if (inout_url.hasQuery())
+    {
+        inout_url.setQuery(inout_url.query() + "&" + project_query_string);
+    }
+    else
+    {
+        inout_url.setQuery(project_query_string);
+    }
+
+    if (inout_url.scheme() == "http")
+        inout_url.setScheme("https");
+}
+
 template <typename Callable>
 const QJsonObject lxd_request_common(const std::string& method, QUrl& url, int timeout, Callable&& handle_request)
 {
@@ -41,20 +60,7 @@ const QJsonObject lxd_request_common(const std::string& method, QUrl& url, int t
     QTimer download_timeout;
     download_timeout.setInterval(timeout);
 
-    if (url.host().isEmpty())
-    {
-        url.setHost(mp::lxd_project_name);
-    }
-
-    const QString project_query_string = QString("project=%1").arg(mp::lxd_project_name);
-    if (url.hasQuery())
-    {
-        url.setQuery(url.query() + "&" + project_query_string);
-    }
-    else
-    {
-        url.setQuery(project_query_string);
-    }
+    setup_lxd_url(url);
 
     mpl::log(mpl::Level::trace, request_category, fmt::format("Requesting LXD: {} {}", method, url.toString()));
     QNetworkRequest request{url};
@@ -113,7 +119,9 @@ const QJsonObject lxd_request_common(const std::string& method, QUrl& url, int t
     mpl::log(mpl::Level::trace, request_category, fmt::format("Got reply: {}", QJsonDocument(json_reply).toJson()));
 
     if (reply->error() != QNetworkReply::NoError)
-        throw mp::LXDRuntimeError(fmt::format("Network error for {}: {} - {}", url.toString(), reply->errorString(),
+        throw mp::LXDNetworkError(fmt::format("Network error for {}: {} - {}",
+                                              url.toString(),
+                                              reply->errorString(),
                                               json_reply.object()["error"].toString()));
 
     return json_reply.object();
@@ -121,7 +129,7 @@ const QJsonObject lxd_request_common(const std::string& method, QUrl& url, int t
 } // namespace
 
 const QJsonObject mp::lxd_request(mp::NetworkAccessManager* manager, const std::string& method, QUrl url,
-                                  const mp::optional<QJsonObject>& json_data, int timeout)
+                                  const std::optional<QJsonObject>& json_data, int timeout)
 try
 {
     auto handle_request = [manager, &json_data](QNetworkRequest& request, const QByteArray& verb) {
@@ -140,6 +148,12 @@ try
     };
 
     return lxd_request_common(method, url, timeout, handle_request);
+}
+catch (const LXDNetworkError& e)
+{
+    mpl::log(mpl::Level::warning, request_category, e.what());
+
+    throw;
 }
 catch (const LXDRuntimeError& e)
 {
@@ -180,7 +194,7 @@ try
                           .arg(base_url.toString())
                           .arg(task_data["metadata"].toObject()["id"].toString()));
 
-        task_reply = lxd_request(manager, "GET", task_url, mp::nullopt, timeout);
+        task_reply = lxd_request(manager, "GET", task_url, std::nullopt, timeout);
 
         if (task_reply["error_code"].toInt() >= 400)
         {

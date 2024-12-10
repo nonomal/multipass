@@ -4,7 +4,13 @@ BasedOnStyle: LLVM
 ---
 Language: Cpp
 IndentWidth: 4
+IndentExternBlock: NoIndent
 BreakBeforeBraces: Custom
+BinPackArguments: false
+BinPackParameters: false
+AllowAllArgumentsOnNextLine: false
+AllowAllParametersOfDeclarationOnNextLine: false
+PenaltyReturnTypeOnItsOwnLine: 120
 BraceWrapping:
   AfterCaseLabel: true
   AfterClass: true

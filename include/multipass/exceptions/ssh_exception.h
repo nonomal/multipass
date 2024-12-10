@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2021-2022 Canonical, Ltd.
+ * Copyright (C) Canonical, Ltd.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -26,9 +26,25 @@ namespace multipass
 class SSHException : public std::runtime_error
 {
 public:
-    SSHException(const std::string& what_arg) : runtime_error(what_arg)
+    explicit SSHException(const std::string& what_arg) : runtime_error(what_arg)
     {
     }
+};
+
+class SSHExecFailure : public SSHException
+{
+public:
+    SSHExecFailure(const std::string& what_arg, int exit_code) : SSHException{what_arg}, ec{exit_code}
+    {
+    }
+
+    int exit_code() const
+    {
+        return ec;
+    }
+
+private:
+    int ec;
 };
 } // namespace multipass
 #endif // MULTIPASS_SSH_EXCEPTION_H

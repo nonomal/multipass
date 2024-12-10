@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2017-2022 Canonical, Ltd.
+ * Copyright (C) Canonical, Ltd.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -22,7 +22,6 @@
 
 namespace mp = multipass;
 namespace cmd = multipass::cmd;
-using RpcMethod = mp::Rpc::Stub;
 
 mp::ReturnCode cmd::Umount::run(mp::ArgParser* parser)
 {

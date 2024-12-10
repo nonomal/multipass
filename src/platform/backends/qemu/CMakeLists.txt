@@ -1,4 +1,4 @@
-# Copyright © 2017-2022 Canonical Ltd.
+# Copyright (C) Canonical, Ltd.
 #
 # This program is free software: you can redistribute it and/or modify
 # it under the terms of the GNU General Public License version 3 as
@@ -24,6 +24,8 @@ add_definitions(-DHOST_ARCH="${HOST_ARCH}")
 
 add_library(qemu_backend STATIC
   qemu_base_process_spec.cpp
+  qemu_mount_handler.cpp
+  qemu_snapshot.cpp
   qemu_vm_process_spec.cpp
   qemu_vmstate_process_spec.cpp
   qemu_virtual_machine_factory.cpp
@@ -37,7 +39,8 @@ target_link_libraries(qemu_backend
   logger
   qemu_img_utils
   qemu_platform_detail
+  scope_guard
   utils
-  Qt5::Core)
+  Qt6::Core)
 
 add_subdirectory(${MULTIPASS_PLATFORM})

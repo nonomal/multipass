@@ -2,10 +2,11 @@
 name: Feature request
 about: Suggest an idea for this project
 title: ''
-labels: enhancement
+labels: enhancement, needs triage
 assignees: ''
 
 ---
+
 **What are you trying to do?**
 A description of what you want to happen.
 

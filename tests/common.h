@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2019-2022 Canonical, Ltd.
+ * Copyright (C) Canonical, Ltd.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -61,6 +61,21 @@
 
 // work around warning: https://github.com/google/googletest/issues/2271#issuecomment-665742471
 #define MP_TYPED_TEST_SUITE(suite_name, types_param) TYPED_TEST_SUITE(suite_name, types_param, )
+
+// Macros to make a mock delegate calls on a base class by default.
+// For example, if `mock_widget` is an object of type `MockWidget` which mocks `Widget`, one can say:
+//     `MP_DELEGATE_MOCK_CALLS_ON_BASE(mock_widget, Widget, render);`
+// This will cause calls to `mock_widget.render()` to delegate on the base implementation in `MockWidget`.
+#define MP_DELEGATE_MOCK_CALLS_ON_BASE(mock, method, BaseT)                                                            \
+    MP_DELEGATE_MOCK_CALLS_ON_BASE_WITH_MATCHERS(mock, method, BaseT, )
+
+// This second form accepts matchers, which are useful to disambiguate overloaded methods. For example:
+//     `MP_DELEGATE_MOCK_CALLS_ON_BASE_WITH_MATCHERS(mock_widget, Widget, render, (A<Canvas>()))`
+// This will redirect the version of `MockWidget::render` that takes one argument of type `Canvas`.
+#define MP_DELEGATE_MOCK_CALLS_ON_BASE_WITH_MATCHERS(mock, method, BaseT, ...)                                         \
+    ON_CALL(mock, method __VA_ARGS__).WillByDefault([m = &mock](auto&&... args) {                                      \
+        return m->BaseT::method(std::forward<decltype(args)>(args)...);                                                \
+    })
 
 // Teach GTest to print Qt stuff
 QT_BEGIN_NAMESPACE

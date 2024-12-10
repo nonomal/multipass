@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2019-2022 Canonical, Ltd.
+ * Copyright (C) Canonical, Ltd.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -15,8 +15,8 @@
  *
  */
 
-#ifndef MULTIPASS_RESETABLE_PROCESS_FACTORY_H
-#define MULTIPASS_RESETABLE_PROCESS_FACTORY_H
+#ifndef MULTIPASS_RESETTABLE_PROCESS_FACTORY_H
+#define MULTIPASS_RESETTABLE_PROCESS_FACTORY_H
 
 #include "process_factory.h" // rely on build system to include the right implementation
 
@@ -35,4 +35,4 @@ struct ResetProcessFactory
 } // namespace test
 } // namespace multipass
 
-#endif // MULTIPASS_RESETABLE_PROCESS_FACTORY_H
+#endif // MULTIPASS_RESETTABLE_PROCESS_FACTORY_H

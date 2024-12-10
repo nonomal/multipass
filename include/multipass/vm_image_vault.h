@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2017-2022 Canonical, Ltd.
+ * Copyright (C) Canonical, Ltd.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -31,6 +31,7 @@
 
 #include <functional>
 #include <memory>
+#include <optional>
 #include <string>
 #include <unordered_map>
 #include <utility>
@@ -79,14 +80,20 @@ public:
     using PrepareAction = std::function<VMImage(const VMImage&)>;
 
     virtual ~VMImageVault() = default;
-    virtual VMImage fetch_image(const FetchType& fetch_type, const Query& query, const PrepareAction& prepare,
-                                const ProgressMonitor& monitor) = 0;
+    virtual VMImage fetch_image(const FetchType& fetch_type,
+                                const Query& query,
+                                const PrepareAction& prepare,
+                                const ProgressMonitor& monitor,
+                                const bool unlock,
+                                const std::optional<std::string>& checksum,
+                                const Path& save_dir) = 0;
     virtual void remove(const std::string& name) = 0;
     virtual bool has_record_for(const std::string& name) = 0;
     virtual void prune_expired_images() = 0;
     virtual void update_images(const FetchType& fetch_type, const PrepareAction& prepare,
                                const ProgressMonitor& monitor) = 0;
     virtual MemorySize minimum_image_size_for(const std::string& id) = 0;
+    virtual void clone(const std::string& source_instance_name, const std::string& destination_instance_name) = 0;
     virtual VMImageHost* image_host_for(const std::string& remote_name) const = 0;
     virtual std::vector<std::pair<std::string, VMImageInfo>> all_info_for(const Query& query) const = 0;
 

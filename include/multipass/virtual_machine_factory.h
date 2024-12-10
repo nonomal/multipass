@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2017-2022 Canonical, Ltd.
+ * Copyright (C) Canonical, Ltd.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -33,6 +33,7 @@ class Node;
 
 namespace multipass
 {
+class SSHKeyProvider;
 class URLDownloader;
 class VirtualMachineDescription;
 class VMImageHost;
@@ -46,7 +47,15 @@ public:
     using UPtr = std::unique_ptr<VirtualMachineFactory>;
     virtual ~VirtualMachineFactory() = default;
     virtual VirtualMachine::UPtr create_virtual_machine(const VirtualMachineDescription& desc,
+                                                        const SSHKeyProvider& key_provider,
                                                         VMStatusMonitor& monitor) = 0;
+    virtual VirtualMachine::UPtr clone_bare_vm(const VMSpecs& src_spec,
+                                               const VMSpecs& dest_spec,
+                                               const std::string& src_name,
+                                               const std::string& dest_name,
+                                               const VMImage& dest_image,
+                                               const SSHKeyProvider& key_provider,
+                                               VMStatusMonitor& monitor) = 0;
 
     /** Removes any resources associated with a VM of the given name.
      *
@@ -59,8 +68,9 @@ public:
     virtual VMImage prepare_source_image(const VMImage& source_image) = 0;
     virtual void prepare_instance_image(const VMImage& instance_image, const VirtualMachineDescription& desc) = 0;
     virtual void hypervisor_health_check() = 0;
-    virtual QString get_backend_directory_name() = 0;
-    virtual QString get_backend_version_string() = 0;
+    virtual QString get_backend_directory_name() const = 0;
+    virtual Path get_instance_directory(const std::string& name) const = 0;
+    virtual QString get_backend_version_string() const = 0;
     virtual VMImageVault::UPtr create_image_vault(std::vector<VMImageHost*> image_hosts, URLDownloader* downloader,
                                                   const Path& cache_dir_path, const Path& data_dir_path,
                                                   const days& days_to_expire) = 0;
@@ -68,6 +78,9 @@ public:
 
     // List all the network interfaces seen by the backend.
     virtual std::vector<NetworkInterfaceInfo> networks() const = 0;
+    virtual void require_snapshots_support() const = 0;
+    virtual void require_suspend_support() const = 0;
+    virtual void require_clone_support() const = 0;
 
 protected:
     VirtualMachineFactory() = default;

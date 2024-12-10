@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2021-2022 Canonical, Ltd.
+ * Copyright (C) Canonical, Ltd.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -29,21 +29,30 @@ namespace test
 {
 struct MockQemuPlatform : public QemuPlatform
 {
-    using QemuPlatform::QemuPlatform; // ctor
+    MockQemuPlatform()
+    {
+        EXPECT_CALL(*this, vmstate_platform_args())
+            .Times(testing::AnyNumber())
+            .WillRepeatedly(testing::Return(QStringList()));
+    }
 
-    MOCK_METHOD1(get_ip_for, optional<IPAddress>(const std::string&));
-    MOCK_METHOD1(remove_resources_for, void(const std::string&));
-    MOCK_METHOD0(platform_health_check, void());
-    MOCK_METHOD0(vmstate_platform_args, QStringList());
-    MOCK_METHOD1(vm_platform_args, QStringList(const VirtualMachineDescription&));
-    MOCK_METHOD0(get_directory_name, QString());
+    MOCK_METHOD(std::optional<IPAddress>, get_ip_for, (const std::string&), (override));
+    MOCK_METHOD(void, remove_resources_for, (const std::string&), (override));
+    MOCK_METHOD(void, platform_health_check, (), (override));
+    MOCK_METHOD(QStringList, vmstate_platform_args, (), (override));
+    MOCK_METHOD(QStringList, vm_platform_args, (const VirtualMachineDescription&), (override));
+    MOCK_METHOD(QString, get_directory_name, (), (const, override));
+    MOCK_METHOD(bool, is_network_supported, (const std::string&), (const, override));
+    MOCK_METHOD(bool, needs_network_prep, (), (const override));
+    MOCK_METHOD(std::string, create_bridge_with, (const NetworkInterfaceInfo&), (const, override));
+    MOCK_METHOD(void, set_authorization, (std::vector<NetworkInterfaceInfo>&), (override));
 };
 
 struct MockQemuPlatformFactory : public QemuPlatformFactory
 {
     using QemuPlatformFactory::QemuPlatformFactory;
 
-    MOCK_CONST_METHOD1(make_qemu_platform, QemuPlatform::UPtr(const Path&));
+    MOCK_METHOD(QemuPlatform::UPtr, make_qemu_platform, (const Path&), (const, override));
 
     MP_MOCK_SINGLETON_BOILERPLATE(MockQemuPlatformFactory, QemuPlatformFactory);
 };

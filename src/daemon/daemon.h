@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2017-2022 Canonical, Ltd.
+ * Copyright (C) Canonical, Ltd.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -21,13 +21,12 @@
 #include "daemon_config.h"
 #include "daemon_rpc.h"
 
+#include <multipass/async_periodic_download_task.h>
 #include <multipass/delayed_shutdown_timer.h>
-#include <multipass/id_mappings.h>
-#include <multipass/memory_size.h>
-#include <multipass/metrics_provider.h>
-#include <multipass/network_interface.h>
-#include <multipass/sshfs_mount/sshfs_mounts.h>
+#include <multipass/format.h>
+#include <multipass/mount_handler.h>
 #include <multipass/virtual_machine.h>
+#include <multipass/vm_specs.h>
 #include <multipass/vm_status_monitor.h>
 
 #include <chrono>
@@ -42,45 +41,22 @@
 
 namespace multipass
 {
-struct VMMount
-{
-    std::string source_path;
-    id_mappings gid_mappings;
-    id_mappings uid_mappings;
-};
-
-struct VMSpecs
-{
-    int num_cores;
-    MemorySize mem_size;
-    MemorySize disk_space;
-    std::string default_mac_address;
-    std::vector<NetworkInterface> extra_interfaces; // We want interfaces to be ordered.
-    std::string ssh_username;
-    VirtualMachine::State state;
-    std::unordered_map<std::string, VMMount> mounts;
-    bool deleted;
-    QJsonObject metadata;
-};
-
-struct MetricsOptInData
-{
-    OptInStatus::Status opt_in_status;
-    int delay_opt_in_count;
-};
-
 struct DaemonConfig;
+class SettingsHandler;
+
 class Daemon : public QObject, public multipass::VMStatusMonitor
 {
     Q_OBJECT
 public:
     explicit Daemon(std::unique_ptr<const DaemonConfig> config);
+    ~Daemon();
 
     void persist_instances();
 
 protected:
+    using InstanceTable = std::unordered_map<std::string, VirtualMachine::ShPtr>;
+
     void on_resume() override;
-    void on_stop() override;
     void on_shutdown() override;
     void on_suspend() override;
     void on_restart(const std::string& name) override;
@@ -89,75 +65,122 @@ protected:
     QJsonObject retrieve_metadata_for(const std::string& name) override;
 
 public slots:
-    virtual void create(const CreateRequest* request, grpc::ServerWriterInterface<CreateReply>* reply,
+    virtual void shutdown_grpc_server();
+
+    virtual void create(const CreateRequest* request,
+                        grpc::ServerReaderWriterInterface<CreateReply, CreateRequest>* server,
                         std::promise<grpc::Status>* status_promise);
 
-    virtual void launch(const LaunchRequest* request, grpc::ServerWriterInterface<LaunchReply>* reply,
+    virtual void launch(const LaunchRequest* request,
+                        grpc::ServerReaderWriterInterface<LaunchReply, LaunchRequest>* server,
                         std::promise<grpc::Status>* status_promise);
 
-    virtual void purge(const PurgeRequest* request, grpc::ServerWriterInterface<PurgeReply>* response,
+    virtual void purge(const PurgeRequest* request, grpc::ServerReaderWriterInterface<PurgeReply, PurgeRequest>* server,
                        std::promise<grpc::Status>* status_promise);
 
-    virtual void find(const FindRequest* request, grpc::ServerWriterInterface<FindReply>* response,
+    virtual void find(const FindRequest* request, grpc::ServerReaderWriterInterface<FindReply, FindRequest>* server,
                       std::promise<grpc::Status>* status_promise);
 
-    virtual void info(const InfoRequest* request, grpc::ServerWriterInterface<InfoReply>* response,
+    virtual void info(const InfoRequest* request, grpc::ServerReaderWriterInterface<InfoReply, InfoRequest>* server,
                       std::promise<grpc::Status>* status_promise);
 
-    virtual void list(const ListRequest* request, grpc::ServerWriterInterface<ListReply>* response,
+    virtual void list(const ListRequest* request, grpc::ServerReaderWriterInterface<ListReply, ListRequest>* server,
                       std::promise<grpc::Status>* status_promise);
 
-    virtual void networks(const NetworksRequest* request, grpc::ServerWriterInterface<NetworksReply>* response,
+    virtual void networks(const NetworksRequest* request,
+                          grpc::ServerReaderWriterInterface<NetworksReply, NetworksRequest>* server,
                           std::promise<grpc::Status>* status_promise);
 
-    virtual void mount(const MountRequest* request, grpc::ServerWriterInterface<MountReply>* response,
+    virtual void mount(const MountRequest* request, grpc::ServerReaderWriterInterface<MountReply, MountRequest>* server,
                        std::promise<grpc::Status>* status_promise);
 
-    virtual void recover(const RecoverRequest* request, grpc::ServerWriterInterface<RecoverReply>* response,
+    virtual void recover(const RecoverRequest* request,
+                         grpc::ServerReaderWriterInterface<RecoverReply, RecoverRequest>* server,
                          std::promise<grpc::Status>* status_promise);
 
-    virtual void ssh_info(const SSHInfoRequest* request, grpc::ServerWriterInterface<SSHInfoReply>* response,
+    virtual void ssh_info(const SSHInfoRequest* request,
+                          grpc::ServerReaderWriterInterface<SSHInfoReply, SSHInfoRequest>* server,
                           std::promise<grpc::Status>* status_promise);
 
-    virtual void start(const StartRequest* request, grpc::ServerWriterInterface<StartReply>* response,
+    virtual void start(const StartRequest* request, grpc::ServerReaderWriterInterface<StartReply, StartRequest>* server,
                        std::promise<grpc::Status>* status_promise);
 
-    virtual void stop(const StopRequest* request, grpc::ServerWriterInterface<StopReply>* response,
+    virtual void stop(const StopRequest* request, grpc::ServerReaderWriterInterface<StopReply, StopRequest>* server,
                       std::promise<grpc::Status>* status_promise);
 
-    virtual void suspend(const SuspendRequest* request, grpc::ServerWriterInterface<SuspendReply>* response,
+    virtual void suspend(const SuspendRequest* request,
+                         grpc::ServerReaderWriterInterface<SuspendReply, SuspendRequest>* server,
                          std::promise<grpc::Status>* status_promise);
 
-    virtual void restart(const RestartRequest* request, grpc::ServerWriterInterface<RestartReply>* response,
+    virtual void restart(const RestartRequest* request,
+                         grpc::ServerReaderWriterInterface<RestartReply, RestartRequest>* server,
                          std::promise<grpc::Status>* status_promise);
 
-    virtual void delet(const DeleteRequest* request, grpc::ServerWriterInterface<DeleteReply>* response,
+    virtual void delet(const DeleteRequest* request,
+                       grpc::ServerReaderWriterInterface<DeleteReply, DeleteRequest>* server,
                        std::promise<grpc::Status>* status_promise);
 
-    virtual void umount(const UmountRequest* request, grpc::ServerWriterInterface<UmountReply>* response,
+    virtual void umount(const UmountRequest* request,
+                        grpc::ServerReaderWriterInterface<UmountReply, UmountRequest>* server,
                         std::promise<grpc::Status>* status_promise);
 
-    virtual void version(const VersionRequest* request, grpc::ServerWriterInterface<VersionReply>* response,
+    virtual void version(const VersionRequest* request,
+                         grpc::ServerReaderWriterInterface<VersionReply, VersionRequest>* server,
                          std::promise<grpc::Status>* status_promise);
 
-    virtual void get(const GetRequest* request, grpc::ServerWriterInterface<GetReply>* response,
+    virtual void get(const GetRequest* request, grpc::ServerReaderWriterInterface<GetReply, GetRequest>* server,
                      std::promise<grpc::Status>* status_promise);
 
+    virtual void set(const SetRequest* request, grpc::ServerReaderWriterInterface<SetReply, SetRequest>* server,
+                     std::promise<grpc::Status>* status_promise);
+
+    virtual void keys(const KeysRequest* request, grpc::ServerReaderWriterInterface<KeysReply, KeysRequest>* server,
+                      std::promise<grpc::Status>* status_promise);
+
     virtual void authenticate(const AuthenticateRequest* request,
-                              grpc::ServerWriterInterface<AuthenticateReply>* response,
+                              grpc::ServerReaderWriterInterface<AuthenticateReply, AuthenticateRequest>* server,
                               std::promise<grpc::Status>* status_promise);
+    virtual void clone(const CloneRequest* request,
+                       grpc::ServerReaderWriterInterface<CloneReply, CloneRequest>* server,
+                       std::promise<grpc::Status>* status_promise);
+
+    virtual void snapshot(const SnapshotRequest* request,
+                          grpc::ServerReaderWriterInterface<SnapshotReply, SnapshotRequest>* server,
+                          std::promise<grpc::Status>* status_promise);
+
+    virtual void restore(const RestoreRequest* request,
+                         grpc::ServerReaderWriterInterface<RestoreReply, RestoreRequest>* server,
+                         std::promise<grpc::Status>* status_promise);
+
+    virtual void daemon_info(const DaemonInfoRequest* request,
+                             grpc::ServerReaderWriterInterface<DaemonInfoReply, DaemonInfoRequest>* server,
+                             std::promise<grpc::Status>* status_promise);
 
 private:
     void release_resources(const std::string& instance);
-    std::string check_instance_operational(const std::string& instance_name) const;
-    std::string check_instance_exists(const std::string& instance_name) const;
-    void create_vm(const CreateRequest* request, grpc::ServerWriterInterface<CreateReply>* server,
+    void create_vm(const CreateRequest* request, grpc::ServerReaderWriterInterface<CreateReply, CreateRequest>* server,
                    std::promise<grpc::Status>* status_promise, bool start);
+    bool delete_vm(InstanceTable::iterator vm_it, bool purge, DeleteReply& response);
     grpc::Status reboot_vm(VirtualMachine& vm);
     grpc::Status shutdown_vm(VirtualMachine& vm, const std::chrono::milliseconds delay);
+    grpc::Status switch_off_vm(VirtualMachine& vm);
     grpc::Status cancel_vm_shutdown(const VirtualMachine& vm);
-    grpc::Status cmd_vms(const std::vector<std::string>& tgts, std::function<grpc::Status(VirtualMachine&)> cmd);
-    void install_sshfs(VirtualMachine* vm, const std::string& name);
+    grpc::Status get_ssh_info_for_vm(VirtualMachine& vm, SSHInfoReply& response);
+
+    void init_mounts(const std::string& name);
+    void stop_mounts(const std::string& name);
+
+    // This returns whether any specs were updated (and need persisting)
+    bool update_mounts(VMSpecs& vm_specs,
+                       std::unordered_map<std::string, MountHandler::UPtr>& vm_mounts,
+                       VirtualMachine* vm);
+
+    // This returns whether all required mount handlers were successfully created
+    bool create_missing_mounts(std::unordered_map<std::string, VMMount>& mount_specs,
+                               std::unordered_map<std::string, MountHandler::UPtr>& vm_mounts,
+                               VirtualMachine* vm);
+
+    MountHandler::UPtr make_mount(VirtualMachine* vm, const std::string& target, const VMMount& mount);
 
     struct AsyncOperationStatus
     {
@@ -165,32 +188,63 @@ private:
         std::promise<grpc::Status>* status_promise;
     };
 
-    template <typename Reply>
+    // These async_* methods need to operate on instance names and look up the VMs again, lest they be gone or moved.
+    template <typename Reply, typename Request>
     std::string async_wait_for_ssh_and_start_mounts_for(const std::string& name, const std::chrono::seconds& timeout,
-                                                        grpc::ServerWriterInterface<Reply>* server);
-    template <typename Reply>
-    AsyncOperationStatus
-    async_wait_for_ready_all(grpc::ServerWriterInterface<Reply>* server, const std::vector<std::string>& vms,
-                             const std::chrono::seconds& timeout, std::promise<grpc::Status>* status_promise);
-    void finish_async_operation(QFuture<AsyncOperationStatus> async_future);
+                                                        grpc::ServerReaderWriterInterface<Reply, Request>* server);
+    template <typename Reply, typename Request>
+    AsyncOperationStatus async_wait_for_ready_all(grpc::ServerReaderWriterInterface<Reply, Request>* server,
+                                                  const std::vector<std::string>& vms,
+                                                  const std::chrono::seconds& timeout,
+                                                  std::promise<grpc::Status>* status_promise,
+                                                  const std::string& errors,
+                                                  const std::string& start_warnings);
+    void finish_async_operation(const std::string& async_future_key);
     QFutureWatcher<AsyncOperationStatus>* create_future_watcher(std::function<void()> const& finished_op = []() {});
+    void update_manifests_all(const bool is_force_update_from_network = false);
+    // it is applied in Daemon::find wherever the image info fetching is involved, aka non-only-blueprints case
+    void wait_update_manifests_all_and_optionally_applied_force(const bool force_manifest_network_download);
+
+    template <typename Reply, typename Request>
+    void reply_msg(grpc::ServerReaderWriterInterface<Reply, Request>* server, std::string&& msg, bool sticky = false);
+
+    void
+    populate_instance_info(VirtualMachine& vm, InfoReply& response, bool runtime_info, bool deleted, bool& have_mounts);
+
+    std::string dest_name_for_clone(const CloneRequest& request);
+    grpc::Status validate_dest_name(const std::string& name);
+    VMSpecs clone_spec(const VMSpecs& src_vm_spec, const std::string& src_name, const std::string& dest_name);
 
     std::unique_ptr<const DaemonConfig> config;
+
+protected:
     std::unordered_map<std::string, VMSpecs> vm_instance_specs;
-    std::unordered_map<std::string, VirtualMachine::ShPtr> vm_instances;
-    std::unordered_map<std::string, VirtualMachine::ShPtr> deleted_instances;
+    InstanceTable operative_instances;
+
+    bool is_bridged(const std::string& instance_name) const;
+    void add_bridged_interface(const std::string& instance_name);
+
+private:
+    InstanceTable deleted_instances;
     std::unordered_map<std::string, std::unique_ptr<DelayedShutdownTimer>> delayed_shutdown_instances;
     std::unordered_set<std::string> allocated_mac_addrs;
     DaemonRpc daemon_rpc;
     QTimer source_images_maintenance_task;
-    MetricsProvider metrics_provider;
-    MetricsOptInData metrics_opt_in;
-    SSHFSMounts instance_mounts;
-    std::vector<std::unique_ptr<QFutureWatcher<AsyncOperationStatus>>> async_future_watchers;
+    multipass::utils::AsyncPeriodicDownloadTask<void> update_manifests_all_task{"fetch manifest periodically",
+                                                                                std::chrono::minutes(15),
+                                                                                std::chrono::seconds(5),
+                                                                                &Daemon::update_manifests_all,
+                                                                                this,
+                                                                                false};
+    std::unordered_map<std::string, std::unique_ptr<QFutureWatcher<AsyncOperationStatus>>> async_future_watchers;
     std::unordered_map<std::string, QFuture<std::string>> async_running_futures;
     std::mutex start_mutex;
     std::unordered_set<std::string> preparing_instances;
     QFuture<void> image_update_future;
+    SettingsHandler* instance_mod_handler;
+    SettingsHandler* snapshot_mod_handler;
+    std::unordered_map<std::string, std::unordered_map<std::string, MountHandler::UPtr>> mounts;
+    std::unordered_set<std::string> user_authorized_bridges;
 };
 } // namespace multipass
 #endif // MULTIPASS_DAEMON_H

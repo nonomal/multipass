@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2019-2022 Canonical, Ltd.
+ * Copyright (C) Canonical, Ltd.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -29,27 +29,19 @@
 #include <multipass/platform.h>
 #include <multipass/snap_utils.h>
 #include <multipass/utils.h>
+#include <multipass/virtual_machine_description.h>
 
 #include <QJsonDocument>
 #include <QJsonObject>
 
 namespace mp = multipass;
 namespace mpl = multipass::logging;
-namespace mu = multipass::utils;
+namespace mpu = multipass::utils;
 
 namespace
 {
 constexpr auto category = "lxd factory";
 const QString multipass_bridge_name = "mpbr0";
-
-template <typename NetworkContainer>
-auto find_bridge_with(const NetworkContainer& networks, const std::string& member_network)
-{
-    return std::find_if(std::cbegin(networks), std::cend(networks),
-                        [&member_network](const mp::NetworkInterfaceInfo& info) {
-                            return info.type == "bridge" && info.has_link(member_network);
-                        });
-}
 
 mp::NetworkInterfaceInfo munch_network(std::map<std::string, mp::NetworkInterfaceInfo>& platform_networks,
                                        const QJsonObject& network)
@@ -81,13 +73,14 @@ mp::NetworkInterfaceInfo munch_network(std::map<std::string, mp::NetworkInterfac
 
     return ret;
 }
-
 } // namespace
 
-mp::LXDVirtualMachineFactory::LXDVirtualMachineFactory(NetworkAccessManager::UPtr manager, const mp::Path& data_dir,
+mp::LXDVirtualMachineFactory::LXDVirtualMachineFactory(NetworkAccessManager::UPtr manager,
+                                                       const mp::Path& data_dir,
                                                        const QUrl& base_url)
-    : manager{std::move(manager)},
-      data_dir{mp::utils::make_dir(data_dir, get_backend_directory_name())},
+    : BaseVirtualMachineFactory(
+          MP_UTILS.derive_instances_dir(data_dir, get_backend_directory_name(), instances_subdir)),
+      manager{std::move(manager)},
       base_url{base_url}
 {
 }
@@ -98,21 +91,39 @@ mp::LXDVirtualMachineFactory::LXDVirtualMachineFactory(const mp::Path& data_dir,
 }
 
 mp::VirtualMachine::UPtr mp::LXDVirtualMachineFactory::create_virtual_machine(const VirtualMachineDescription& desc,
+                                                                              const SSHKeyProvider& key_provider,
                                                                               VMStatusMonitor& monitor)
 {
-    return std::make_unique<mp::LXDVirtualMachine>(desc, monitor, manager.get(), base_url, multipass_bridge_name,
-                                                   storage_pool);
+    return std::make_unique<mp::LXDVirtualMachine>(desc,
+                                                   monitor,
+                                                   manager.get(),
+                                                   base_url,
+                                                   multipass_bridge_name,
+                                                   storage_pool,
+                                                   key_provider,
+                                                   MP_UTILS.make_dir(get_instance_directory(desc.vm_name)));
 }
 
-void mp::LXDVirtualMachineFactory::remove_resources_for(const std::string& name)
+void mp::LXDVirtualMachineFactory::remove_resources_for_impl(const std::string& name)
 {
-    mpl::log(mpl::Level::trace, category, fmt::format("No resources to remove for \"{}\"", name));
+    mpl::log(mpl::Level::trace, category, fmt::format("No further resources to remove for \"{}\"", name));
+}
+
+auto mp::LXDVirtualMachineFactory::prepare_source_image(const VMImage& source_image) -> VMImage
+{
+    mpl::log(mpl::Level::trace, category, "No driver preparation required for source image");
+    return source_image;
 }
 
 void mp::LXDVirtualMachineFactory::prepare_instance_image(const mp::VMImage& /* instance_image */,
                                                           const VirtualMachineDescription& /* desc */)
 {
     mpl::log(mpl::Level::trace, category, "No driver preparation for instance image");
+}
+
+void mp::LXDVirtualMachineFactory::configure(VirtualMachineDescription& /*vm_desc*/)
+{
+    mpl::log(mpl::Level::trace, category, "No preliminary configure step in LXD driver");
 }
 
 void mp::LXDVirtualMachineFactory::hypervisor_health_check()
@@ -126,7 +137,7 @@ void mp::LXDVirtualMachineFactory::hypervisor_health_check()
     catch (const LocalSocketConnectionException& e)
     {
         std::string snap_msg;
-        if (mu::in_multipass_snap())
+        if (mpu::in_multipass_snap())
             snap_msg = " Also make sure\n the LXD interface is connected via `snap connect multipass:lxd lxd`.";
 
         throw std::runtime_error(
@@ -194,7 +205,7 @@ void mp::LXDVirtualMachineFactory::hypervisor_health_check()
     }
 }
 
-QString mp::LXDVirtualMachineFactory::get_backend_version_string()
+QString mp::LXDVirtualMachineFactory::get_backend_version_string() const
 {
     auto reply = lxd_request(manager.get(), "GET", base_url);
 
@@ -221,22 +232,18 @@ auto mp::LXDVirtualMachineFactory::networks() const -> std::vector<NetworkInterf
 
     if (!networks.isEmpty())
     {
+        const auto& br_nomenclature = MP_PLATFORM.bridge_nomenclature();
         auto platform_networks = MP_PLATFORM.get_network_interfaces_info();
         for (const QJsonValueRef net_value : networks)
             if (auto network = munch_network(platform_networks, net_value.toObject()); !network.id.empty())
                 ret.push_back(std::move(network));
 
         for (auto& net : ret)
-            if (net.needs_authorization && find_bridge_with(ret, net.id) != ret.cend())
+            if (net.needs_authorization && mpu::find_bridge_with(ret, net.id, br_nomenclature))
                 net.needs_authorization = false;
     }
 
     return ret;
-}
-
-void mp::LXDVirtualMachineFactory::prepare_networking(std::vector<NetworkInterface>& extra_interfaces)
-{
-    prepare_networking_guts(extra_interfaces, "bridge");
 }
 
 std::string mp::LXDVirtualMachineFactory::create_bridge_with(const NetworkInterfaceInfo& interface)

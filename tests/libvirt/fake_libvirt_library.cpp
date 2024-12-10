@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2019-2022 Canonical, Ltd.
+ * Copyright (C) Canonical, Ltd.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -160,4 +160,14 @@ const char* virGetLastErrorMessage()
 {
     static char fake_error[64] = "";
     return fake_error;
+}
+
+int virDomainSetVcpusFlags(virDomainPtr /*domain*/, unsigned int /*nvcpus*/, unsigned int /*flags*/)
+{
+    return 1;
+}
+
+int virDomainSetMemoryFlags(virDomainPtr /*domain*/, unsigned long /*memory*/, unsigned int /*flags*/)
+{
+    return 1;
 }

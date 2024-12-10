@@ -29,8 +29,16 @@ set(LIBSSH_INCLUDE_DIRS
 set(LIB_INSTALL_DIR lib)
 set(BIN_INSTALL_DIR bin)
 
-set(BUILD_SHARED_LIBS ON)
-set(GLOBAL_CLIENT_CONFIG "/etc/ssh/ssh_config")
+if(LINUX)
+    set(BUILD_SHARED_LIBS OFF)
+    set(CMAKE_POSITION_INDEPENDENT_CODE ON)
+else()
+    # This applies to other platforms (e.g., Windows, macOS)
+    set(BUILD_SHARED_LIBS ON)
+endif()
+
+# space instead of empty string because empty string restults in non-defined GLOBAL_CLIENT_CONFIG in config.h
+set(GLOBAL_CLIENT_CONFIG " ")
 set(GLOBAL_BIND_CONFIG "/etc/ssh/libssh_server_config")
 
 include_directories(${LIBSSH_INCLUDE_DIRS})
@@ -52,13 +60,15 @@ file(STRINGS libssh/CMakeLists.txt LIBRARY_VERSION REGEX "^set\\(LIBRARY_VERSION
 file(STRINGS libssh/CMakeLists.txt LIBRARY_SOVERSION REGEX "^set\\(LIBRARY_SOVERSION")
 
 string(REGEX MATCH "^project\\(libssh VERSION ([0-9]+)\\.([0-9]+)\\.([0-9]+) LANGUAGES C\\)$"
-       libssh_VERSION "${libssh_VERSION}")
+  libssh_VERSION "${libssh_VERSION}")
 if (NOT libssh_VERSION)
     message(FATAL_ERROR "unable to find libssh project version")
 endif()
 set(libssh_VERSION_MAJOR "${CMAKE_MATCH_1}")
 set(libssh_VERSION_MINOR "${CMAKE_MATCH_2}")
 set(libssh_VERSION_PATCH "${CMAKE_MATCH_3}")
+
+add_compile_options(-DCHUNKSIZE=65536)
 
 string(REGEX REPLACE "^set\\(LIBRARY_VERSION \"(.*)\"\\)$" "\\1"
        LIBRARY_VERSION "${LIBRARY_VERSION}")

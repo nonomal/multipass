@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2020-2022 Canonical, Ltd.
+ * Copyright (C) Canonical, Ltd.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -19,6 +19,7 @@
 #define MULTIPASS_LXD_VM_IMAGE_VAULT_H
 
 #include <multipass/days.h>
+#include <multipass/exceptions/not_implemented_on_this_backend_exception.h>
 #include <multipass/query.h>
 #include <shared/base_vm_image_vault.h>
 
@@ -39,18 +40,27 @@ public:
     LXDVMImageVault(std::vector<VMImageHost*> image_host, URLDownloader* downloader, NetworkAccessManager* manager,
                     const QUrl& base_url, const QString& cache_dir_path, const multipass::days& days_to_expire);
 
-    VMImage fetch_image(const FetchType& fetch_type, const Query& query, const PrepareAction& prepare,
-                        const ProgressMonitor& monitor) override;
+    VMImage fetch_image(const FetchType& fetch_type,
+                        const Query& query,
+                        const PrepareAction& prepare,
+                        const ProgressMonitor& monitor,
+                        const bool unlock,
+                        const std::optional<std::string>& checksum,
+                        const Path& /* save_dir */) override;
     void remove(const std::string& name) override;
     bool has_record_for(const std::string& name) override;
     void prune_expired_images() override;
     void update_images(const FetchType& fetch_type, const PrepareAction& prepare,
                        const ProgressMonitor& monitor) override;
     MemorySize minimum_image_size_for(const std::string& id) override;
+    void clone(const std::string& source_instance_name, const std::string& destination_instance_name) override
+    {
+        throw NotImplementedOnThisBackendException("clone");
+    }
 
 private:
-    void lxd_download_image(const QString& id, const QString& stream_location, const Query& query,
-                            const ProgressMonitor& monitor, const QString& last_used = QString());
+    void lxd_download_image(const VMImageInfo& info, const Query& query, const ProgressMonitor& monitor,
+                            const QString& last_used = QString());
     void url_download_image(const VMImageInfo& info, const QString& image_path, const ProgressMonitor& monitor);
     void poll_download_operation(const QJsonObject& json_reply, const ProgressMonitor& monitor);
     std::string lxd_import_metadata_and_image(const QString& metadata_path, const QString& image_path);

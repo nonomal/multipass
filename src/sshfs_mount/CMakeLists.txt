@@ -1,4 +1,4 @@
-# Copyright © 2017-2022 Canonical Ltd.
+# Copyright (C) Canonical, Ltd.
 #
 # This program is free software: you can redistribute it and/or modify
 # it under the terms of the GNU General Public License version 3 as
@@ -18,11 +18,11 @@ function(add_sshfs_mount_target TARGET_NAME)
 
   add_library(${TARGET_NAME} STATIC
     sshfs_mount.cpp
-    sshfs_mounts.cpp
+    sshfs_mount_handler.cpp
     sftp_server.cpp
     # Need to run MOC on these
-    ${CMAKE_SOURCE_DIR}/include/multipass/sshfs_mount/sshfs_mount.h
-    ${CMAKE_SOURCE_DIR}/include/multipass/sshfs_mount/sshfs_mounts.h)
+    sshfs_mount.h
+    ${CMAKE_SOURCE_DIR}/include/multipass/sshfs_mount/sshfs_mount_handler.h)
 
   target_link_libraries(${TARGET_NAME}
     fmt
@@ -30,7 +30,7 @@ function(add_sshfs_mount_target TARGET_NAME)
     platform
     ssh
     utils
-    Qt5::Core)
+    Qt6::Core)
 endfunction()
 
 add_sshfs_mount_target(sshfs_mount)
@@ -44,6 +44,11 @@ add_executable(sshfs_server
 target_link_libraries(sshfs_server
   logger
   sshfs_mount)
+
+target_include_directories(sshfs_server
+  BEFORE
+    PRIVATE ${CMAKE_SOURCE_DIR}/src
+)
 
 install(TARGETS sshfs_server
   DESTINATION bin

@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2017-2022 Canonical, Ltd.
+ * Copyright (C) Canonical, Ltd.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -32,8 +32,7 @@ class Exec final : public Command
 public:
     using Command::Command;
 
-    Exec(grpc::Channel& channel, Rpc::Stub& stub, Terminal* term, AliasDict& dict)
-        : Command(channel, stub, term), aliases(dict)
+    Exec(Rpc::StubInterface& stub, Terminal* term, AliasDict& dict) : Command(stub, term), aliases(dict)
     {
     }
 
@@ -42,13 +41,15 @@ public:
     QString short_help() const override;
     QString description() const override;
 
-    static ReturnCode exec_success(const SSHInfoReply& reply, const std::vector<std::string>& args, Terminal* term);
+    static ReturnCode exec_success(const SSHInfoReply& reply, const std::optional<std::string>& dir,
+                                   const std::vector<std::string>& args, Terminal* term);
 
 private:
-    SSHInfoRequest request;
+    SSHInfoRequest ssh_info_request;
+    InfoRequest info_request;
     AliasDict aliases;
 
-    ParseCode parse_args(ArgParser* parser) override;
+    ParseCode parse_args(ArgParser* parser);
 };
 } // namespace cmd
 } // namespace multipass

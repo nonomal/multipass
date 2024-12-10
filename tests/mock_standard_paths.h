@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2020-2022 Canonical, Ltd.
+ * Copyright (C) Canonical, Ltd.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -34,9 +34,9 @@ public:
     static void mockit();
     static MockStandardPaths& mock_instance();
 
-    MOCK_CONST_METHOD3(locate, QString(StandardLocation, const QString&, LocateOptions));
-    MOCK_CONST_METHOD1(standardLocations, QStringList(StandardLocation type));
-    MOCK_CONST_METHOD1(writableLocation, QString(StandardLocation type));
+    MOCK_METHOD(QString, locate, (StandardLocation, const QString&, LocateOptions), (const, override));
+    MOCK_METHOD(QStringList, standardLocations, (StandardLocation type), (const, override));
+    MOCK_METHOD(QString, writableLocation, (StandardLocation type), (const, override));
 
 private:
     void setup_mock_defaults();

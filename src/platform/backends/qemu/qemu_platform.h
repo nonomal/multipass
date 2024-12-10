@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2021-2022 Canonical, Ltd.
+ * Copyright (C) Canonical, Ltd.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -19,8 +19,9 @@
 #define MULTIPASS_QEMU_PLATFORM_H
 
 #include <multipass/disabled_copy_move.h>
+#include <multipass/exceptions/not_implemented_on_this_backend_exception.h>
 #include <multipass/ip_address.h>
-#include <multipass/optional.h>
+#include <multipass/network_interface_info.h>
 #include <multipass/path.h>
 #include <multipass/singleton.h>
 #include <multipass/virtual_machine_description.h>
@@ -29,6 +30,7 @@
 #include <QStringList>
 
 #include <memory>
+#include <optional>
 #include <string>
 
 namespace multipass
@@ -40,7 +42,7 @@ public:
 
     virtual ~QemuPlatform() = default;
 
-    virtual optional<IPAddress> get_ip_for(const std::string& hw_addr) = 0;
+    virtual std::optional<IPAddress> get_ip_for(const std::string& hw_addr) = 0;
     virtual void remove_resources_for(const std::string&) = 0;
     virtual void platform_health_check() = 0;
     virtual QStringList vmstate_platform_args()
@@ -48,10 +50,14 @@ public:
         return {};
     };
     virtual QStringList vm_platform_args(const VirtualMachineDescription& vm_desc) = 0;
-    virtual QString get_directory_name()
+    virtual QString get_directory_name() const
     {
         return {};
     };
+    virtual bool is_network_supported(const std::string& network_type) const = 0;
+    virtual bool needs_network_prep() const = 0;
+    virtual std::string create_bridge_with(const NetworkInterfaceInfo& interface) const = 0;
+    virtual void set_authorization(std::vector<NetworkInterfaceInfo>& networks) = 0;
 
 protected:
     explicit QemuPlatform() = default;

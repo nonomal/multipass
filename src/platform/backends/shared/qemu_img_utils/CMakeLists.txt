@@ -1,4 +1,4 @@
-# Copyright © 2021-2022 Canonical Ltd.
+# Copyright (C) Canonical, Ltd.
 #
 # This program is free software: you can redistribute it and/or modify
 # it under the terms of the GNU General Public License version 3 as
@@ -17,4 +17,4 @@ add_library(qemu_img_utils STATIC EXCLUDE_FROM_ALL
 
 target_link_libraries(qemu_img_utils
   fmt
-  Qt5::Core)
+  Qt6::Core)

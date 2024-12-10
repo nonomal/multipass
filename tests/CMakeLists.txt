@@ -1,4 +1,4 @@
-# Copyright © 2017-2022 Canonical Ltd.
+# Copyright (C) Canonical, Ltd.
 #
 # This program is free software: you can redistribute it and/or modify
 # it under the terms of the GNU General Public License version 3 as
@@ -27,24 +27,26 @@ FetchContent_Declare(googletest
   GIT_PROGRESS TRUE
 )
 set(gtest_force_shared_crt ON CACHE BOOL "" FORCE)
+set(INSTALL_GTEST OFF CACHE BOOL "")
 FetchContent_MakeAvailable(googletest)
 
 add_executable(multipass_tests
+  blueprint_test_lambdas.cpp
   common.cpp
+  daemon_test_fixture.cpp
   file_operations.cpp
   image_host_remote_count.cpp
-  json_utils.cpp
+  json_test_utils.cpp
   main.cpp
   mischievous_url_downloader.cpp
   mock_logger.cpp
-  mock_process_factory.cpp
   mock_openssl_syscalls.cpp
-  mock_settings.cpp
-  mock_standard_paths.cpp
+  mock_process_factory.cpp
   mock_sftp.cpp
   mock_sftpserver.cpp
   mock_ssh.cpp
   mock_ssh_client.cpp
+  mock_standard_paths.cpp
   path.cpp
   reset_process_factory.cpp
   stub_process_factory.cpp
@@ -52,6 +54,7 @@ add_executable(multipass_tests
   temp_file.cpp
   test_alias_dict.cpp
   test_argparser.cpp
+  test_base_snapshot.cpp
   test_base_virtual_machine.cpp
   test_base_virtual_machine_factory.cpp
   test_basic_process.cpp
@@ -60,46 +63,67 @@ add_executable(multipass_tests
   test_client_cert_store.cpp
   test_client_common.cpp
   test_cloud_init_iso.cpp
+  test_common_callbacks.cpp
   test_constants.cpp
   test_custom_image_host.cpp
   test_daemon.cpp
   test_daemon_authenticate.cpp
+  test_daemon_clone.cpp
   test_daemon_find.cpp
+  test_daemon_launch.cpp
+  test_daemon_mount.cpp
+  test_daemon_snapshot_restore.cpp
+  test_daemon_start.cpp
+  test_daemon_suspend.cpp
+  test_daemon_umount.cpp
   test_delayed_shutdown.cpp
   test_disabled_copy_move.cpp
   test_format_utils.cpp
-  test_output_formatter.cpp
+  test_global_settings_handlers.cpp
+  test_id_mappings.cpp
   test_image_vault.cpp
+  test_instance_settings_handler.cpp
   test_ip_address.cpp
+  test_json_utils.cpp
   test_memory_size.cpp
-  test_metrics_provider.cpp
-  test_new_release_monitor.cpp
-  test_petname.cpp
-  test_platform_shared.cpp
-  test_private_pass_provider.cpp
   test_mock_standard_paths.cpp
+  test_mount_handler.cpp
+  test_new_release_monitor.cpp
+  test_output_formatter.cpp
+  test_persistent_settings_handler.cpp
+  test_petname.cpp
+  test_private_pass_provider.cpp
   test_qemuimg_process_spec.cpp
-  test_simple_streams_index.cpp
-  test_simple_streams_manifest.cpp
-  test_singleton.cpp
+  test_remote_settings_handler.cpp
+  test_setting_specs.cpp
   test_settings.cpp
   test_sftp_client.cpp
   test_sftpserver.cpp
-  test_ssl_cert_provider.cpp
-  test_sshfs_server_process_spec.cpp
-  test_sshfsmount.cpp
-  test_sshfsmounts.cpp
+  test_simple_streams_index.cpp
+  test_simple_streams_manifest.cpp
+  test_singleton.cpp
   test_ssh_client.cpp
+  test_ssh_exec_failure.cpp
   test_ssh_key_provider.cpp
   test_ssh_process.cpp
   test_ssh_session.cpp
+  test_sshfs_server_process_spec.cpp
+  test_sshfsmount.cpp
+  test_sshfs_mount_handler.cpp
+  test_ssl_cert_provider.cpp
   test_timer.cpp
   test_top_catch_all.cpp
   test_ubuntu_image_host.cpp
   test_url_downloader.cpp
   test_utils.cpp
+  test_yaml_node_utils.cpp
+  test_vm_mount.cpp
   test_with_mocked_bin_path.cpp
-  test_workflow_provider.cpp
+  test_blueprint_provider.cpp
+  test_sftp_dir_iterator.cpp
+  test_sftp_utils.cpp
+  test_file_ops.cpp
+  test_recursive_dir_iter.cpp
 )
 
 target_include_directories(multipass_tests
@@ -130,10 +154,10 @@ target_link_libraries(multipass_tests
   gtest_main
   ip_address
   iso
-  metrics
   network
   petname
   poco_utils
+  settings
   simplestreams
   sftp_test
   ssh_test

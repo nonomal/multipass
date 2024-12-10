@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2019-2022 Canonical, Ltd.
+ * Copyright (C) Canonical, Ltd.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -19,14 +19,14 @@
 #include "common_cli.h"
 
 #include "animated_spinner.h"
+#include "common_callbacks.h"
 
 #include <multipass/cli/argparser.h>
 #include <multipass/constants.h>
-#include <multipass/settings.h>
+#include <multipass/settings/settings.h>
 
 namespace mp = multipass;
 namespace cmd = multipass::cmd;
-using RpcMethod = mp::Rpc::Stub;
 
 mp::ReturnCode cmd::Suspend::run(mp::ArgParser* parser)
 {
@@ -46,7 +46,8 @@ mp::ReturnCode cmd::Suspend::run(mp::ArgParser* parser)
 
     spinner.start(instance_action_message_for(request.instance_names(), "Suspending "));
     request.set_verbosity_level(parser->verbosityLevel());
-    return dispatch(&RpcMethod::suspend, request, on_success, on_failure);
+    return dispatch(&RpcMethod::suspend, request, on_success, on_failure,
+                    make_logging_spinner_callback<SuspendRequest, SuspendReply>(spinner, cerr));
 }
 
 std::string cmd::Suspend::name() const

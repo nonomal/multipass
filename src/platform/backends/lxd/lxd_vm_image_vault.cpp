@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2020-2022 Canonical, Ltd.
+ * Copyright (C) Canonical, Ltd.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -19,6 +19,7 @@
 #include "lxd_request.h"
 
 #include <multipass/exceptions/aborted_download_exception.h>
+#include <multipass/exceptions/image_vault_exceptions.h>
 #include <multipass/exceptions/local_socket_connection_exception.h>
 #include <multipass/format.h>
 #include <multipass/logging/log.h>
@@ -156,12 +157,19 @@ mp::LXDVMImageVault::LXDVMImageVault(std::vector<VMImageHost*> image_hosts, URLD
 {
 }
 
-mp::VMImage mp::LXDVMImageVault::fetch_image(const FetchType& fetch_type, const Query& query,
-                                             const PrepareAction& prepare, const ProgressMonitor& monitor)
+mp::VMImage mp::LXDVMImageVault::fetch_image(const FetchType& fetch_type,
+                                             const Query& query,
+                                             const PrepareAction& prepare,
+                                             const ProgressMonitor& monitor,
+                                             const bool unlock,
+                                             const std::optional<std::string>& checksum,
+                                             const mp::Path& /* save_dir */)
 {
     // Look for an already existing instance and get its image info
     try
     {
+        VMImage source_image;
+
         auto instance_info = lxd_request(
             manager, "GET",
             QUrl(QString("%1/virtual-machines/%2").arg(base_url.toString()).arg(QString::fromStdString(query.name))));
@@ -170,8 +178,6 @@ mp::VMImage mp::LXDVMImageVault::fetch_image(const FetchType& fetch_type, const 
 
         if (config.contains("image.original_hash"))
         {
-            VMImage source_image;
-
             source_image.id = config["image.original_hash"].toString().toStdString();
             source_image.original_release = config["image.description"].toString().toStdString();
             source_image.release_date = config["image.version"].toString().toStdString();
@@ -179,17 +185,28 @@ mp::VMImage mp::LXDVMImageVault::fetch_image(const FetchType& fetch_type, const 
             return source_image;
         }
 
-        Query image_query;
-        image_query.release = config["volatile.base_image"].toString().toStdString();
+        source_image.id = config["volatile.base_image"].toString().toStdString();
 
-        const auto info = info_for(image_query);
+        if (config.contains("image.release_title"))
+        {
+            source_image.original_release = config["image.release_title"].toString().toStdString();
+        }
+        else
+        {
+            Query image_query;
+            image_query.release = config["image.release"].toString().toStdString();
 
-        VMImage source_image;
+            try
+            {
+                const auto info = info_for(image_query);
 
-        source_image.id = info.id.toStdString();
-        source_image.original_release = info.release_title.toStdString();
-        source_image.release_date = info.version.toStdString();
-        source_image.aliases = copy_aliases(info.aliases);
+                source_image.original_release = info->release_title.toStdString();
+            }
+            catch (const std::exception&)
+            {
+                // do nothing
+            }
+        }
 
         return source_image;
     }
@@ -213,7 +230,11 @@ mp::VMImage mp::LXDVMImageVault::fetch_image(const FetchType& fetch_type, const 
 
     if (query.query_type == Query::Type::Alias)
     {
-        info = info_for(query);
+        if (auto image_info = info_for(query); image_info)
+            info = *image_info;
+        else
+            throw mp::ImageNotFoundException(query.release, query.remote_name);
+
         id = info.id;
 
         source_image.id = id.toStdString();
@@ -228,8 +249,10 @@ mp::VMImage mp::LXDVMImageVault::fetch_image(const FetchType& fetch_type, const 
 
         if (query.query_type == Query::Type::HttpDownload)
         {
-            // Generate a sha256 hash based on the URL and use that for the id
-            id = QString(QCryptographicHash::hash(query.release.c_str(), QCryptographicHash::Sha256).toHex());
+            // If no checksum given, generate a sha256 hash based on the URL and use that for the id
+            id = checksum
+                     ? QString::fromStdString(*checksum)
+                     : QString(QCryptographicHash::hash(query.release.c_str(), QCryptographicHash::Sha256).toHex());
             last_modified = url_downloader->last_modified(image_url);
         }
         else
@@ -242,7 +265,18 @@ mp::VMImage mp::LXDVMImageVault::fetch_image(const FetchType& fetch_type, const 
             last_modified = QDateTime::currentDateTime();
         }
 
-        info = VMImageInfo{{}, {}, {}, {}, true, image_url.url(), {}, {}, id, {}, last_modified.toString(), 0, false};
+        info = VMImageInfo{{},
+                           {},
+                           {},
+                           {},
+                           {},
+                           true,
+                           image_url.url(),
+                           id,
+                           {},
+                           last_modified.toString(),
+                           0,
+                           checksum.has_value()};
 
         source_image.id = id.toStdString();
         source_image.release_date = last_modified.toString(Qt::ISODateWithMs).toStdString();
@@ -261,7 +295,7 @@ mp::VMImage mp::LXDVMImageVault::fetch_image(const FetchType& fetch_type, const 
         }
         else if (!info.stream_location.isEmpty())
         {
-            lxd_download_image(id, info.stream_location, query, monitor);
+            lxd_download_image(info, query, monitor);
         }
         else if (!info.image_location.isEmpty())
         {
@@ -395,14 +429,15 @@ void mp::LXDVMImageVault::update_images(const FetchType& fetch_type, const Prepa
             try
             {
                 auto info = info_for(query);
+                if (!info)
+                    throw mp::ImageNotFoundException(query.release, query.remote_name);
 
-                if (info.id != id)
+                if (info->id != id)
                 {
                     mpl::log(mpl::Level::info, category,
                              fmt::format("Updating {} source image to latest", query.release));
 
-                    lxd_download_image(info.id, info.stream_location, query, monitor,
-                                       image_info["last_used_at"].toString());
+                    lxd_download_image(*info, query, monitor, image_info["last_used_at"].toString());
 
                     lxd_request(manager, "DELETE", QUrl(QString("%1/images/%2").arg(base_url.toString()).arg(id)));
                 }
@@ -439,14 +474,15 @@ mp::MemorySize mp::LXDVMImageVault::minimum_image_size_for(const std::string& id
     return lxd_image_size;
 }
 
-void mp::LXDVMImageVault::lxd_download_image(const QString& id, const QString& stream_location, const Query& query,
+void mp::LXDVMImageVault::lxd_download_image(const VMImageInfo& info, const Query& query,
                                              const ProgressMonitor& monitor, const QString& last_used)
 {
+    const auto id = info.id;
     QJsonObject source_object;
 
     source_object.insert("type", "image");
     source_object.insert("mode", "pull");
-    source_object.insert("server", stream_location);
+    source_object.insert("server", info.stream_location);
     source_object.insert("protocol", "simplestreams");
     source_object.insert("image_type", "virtual-machine");
     source_object.insert("fingerprint", id);
@@ -458,7 +494,8 @@ void mp::LXDVMImageVault::lxd_download_image(const QString& id, const QString& s
     if (!id.startsWith(release))
     {
         QJsonObject properties_object{{"query.release", release},
-                                      {"query.remote", QString::fromStdString(query.remote_name)}};
+                                      {"query.remote", QString::fromStdString(query.remote_name)},
+                                      {"release_title", info.release_title}};
 
         // Need to save the original image's last_used_at as a property since there is no way to modify the
         // new image's last_used_at field.
@@ -499,6 +536,7 @@ void mp::LXDVMImageVault::poll_download_operation(const QJsonObject& json_reply,
                           .arg(json_reply["metadata"].toObject()["id"].toString()));
 
         // Instead of polling, need to use websockets to get events
+        auto last_download_progress = -2;
         while (true)
         {
             try
@@ -521,11 +559,14 @@ void mp::LXDVMImageVault::poll_download_operation(const QJsonObject& json_reply,
                     auto download_progress = parse_percent_as_int(
                         task_reply["metadata"].toObject()["metadata"].toObject()["download_progress"].toString());
 
-                    if (!monitor(LaunchProgress::IMAGE, download_progress))
+                    if (last_download_progress != download_progress &&
+                        !monitor(LaunchProgress::IMAGE, download_progress))
                     {
                         mp::lxd_request(manager, "DELETE", task_url);
                         throw mp::AbortedDownloadException{"Download aborted"};
                     }
+
+                    last_download_progress = download_progress;
 
                     std::this_thread::sleep_for(1s);
                 }

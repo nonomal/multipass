@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2021-2022 Canonical, Ltd.
+ * Copyright (C) Canonical, Ltd.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -27,10 +27,8 @@ namespace multipass
 class ImageNotFoundException : public std::runtime_error
 {
 public:
-    ImageNotFoundException(const std::string& image)
-        : runtime_error(fmt::format("Unable to find an image matching \"{}\"."
-                                    " Please use `multipass find` for supported remotes and images.",
-                                    image))
+    ImageNotFoundException(const std::string& image, const std::string& remote)
+        : runtime_error(fmt::format("Unable to find an image matching \"{}\" in remote \"{}\".", image, remote))
     {
     }
 };

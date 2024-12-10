@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2017-2022 Canonical, Ltd.
+ * Copyright (C) Canonical, Ltd.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -19,7 +19,7 @@
 #include <multipass/format.h>
 
 #include <QFileInfo>
-#include <QRegExp>
+#include <QRegularExpression>
 
 #include <algorithm>
 
@@ -37,6 +37,13 @@ namespace cmd = multipass::cmd;
 
 namespace
 {
+const QStringList help_option_names
+#ifdef MULTIPASS_PLATFORM_WINDOWS
+    {"?", "h", "help"};
+#else
+    {"h", "help"};
+#endif
+
 auto max_command_string_length(const std::vector<cmd::Command::UPtr>& commands)
 {
     auto ret = 0ul;
@@ -80,7 +87,7 @@ auto verbosity_level_in(const QStringList& arguments)
             return 2;
         if (arg == QStringLiteral("-vvv"))
             return 3;
-        if (QRegExp{"-vvvv+"}.exactMatch(arg))
+        if (QRegularExpression{"-vvvv+"}.match(arg).hasMatch())
             return 4;
     }
     return 0;
@@ -105,14 +112,15 @@ mp::ParseCode mp::ArgParser::prepare_alias_execution(const QString& alias)
     return mp::ParseCode::Ok;
 }
 
-mp::ParseCode mp::ArgParser::parse(const mp::optional<mp::AliasDict>& aliases)
+mp::ParseCode mp::ArgParser::parse(const std::optional<mp::AliasDict>& aliases)
 {
-    QCommandLineOption help_option = parser.addHelpOption();
+    QCommandLineOption help_option(help_option_names, "Displays help on commandline options");
     QCommandLineOption verbose_option({"v", "verbose"},
                                       "Increase logging verbosity. Repeat the 'v' in the short option for more detail. "
                                       "Maximum verbosity is obtained with 4 (or more) v's, i.e. -vvvv.");
     QCommandLineOption version_option({"V", "version"}, "Show version details");
     version_option.setFlags(QCommandLineOption::HiddenFromHelp);
+    parser.addOption(help_option);
     parser.addOption(verbose_option);
     parser.addOption(version_option);
 
@@ -263,7 +271,7 @@ QString mp::ArgParser::helpText(cmd::Command* command)
     text = text.replace(QCommandLineParser::tr("[options]") + " <command>",
                         QString::fromStdString(command->name()) + " " + QCommandLineParser::tr("[options]"));
 
-    int start = text.indexOf(QRegExp("  command\\s*The command to execute"));
+    int start = text.indexOf(QRegularExpression("  command\\s*The command to execute"));
     int end = text.indexOf(nl, start);
     text = text.replace(start, end - start + 1, "");
 

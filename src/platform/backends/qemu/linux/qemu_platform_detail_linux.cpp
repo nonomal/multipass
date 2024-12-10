@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2021-2022 Canonical, Ltd.
+ * Copyright (C) Canonical, Ltd.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -20,14 +20,17 @@
 #include <multipass/file_ops.h>
 #include <multipass/format.h>
 #include <multipass/logging/log.h>
+#include <multipass/platform.h>
 #include <multipass/utils.h>
 
 #include <shared/linux/backend_utils.h>
 
+#include <QCoreApplication>
 #include <QFile>
 
 namespace mp = multipass;
 namespace mpl = multipass::logging;
+namespace mpu = multipass::utils;
 
 namespace
 {
@@ -116,7 +119,7 @@ void delete_virtual_switch(const QString& bridge_name)
 
 mp::QemuPlatformDetail::QemuPlatformDetail(const mp::Path& data_dir)
     : bridge_name{multipass_bridge_name},
-      network_dir{mp::utils::make_dir(QDir(data_dir), "network")},
+      network_dir{MP_UTILS.make_dir(QDir(data_dir), "network")},
       subnet{MP_BACKEND.get_subnet(network_dir, bridge_name)},
       dnsmasq_server{init_nat_network(network_dir, bridge_name, subnet)},
       firewall_config{MP_FIREWALL_CONFIG_FACTORY.make_firewall_config(bridge_name, subnet)}
@@ -134,7 +137,7 @@ mp::QemuPlatformDetail::~QemuPlatformDetail()
     delete_virtual_switch(bridge_name);
 }
 
-mp::optional<mp::IPAddress> mp::QemuPlatformDetail::get_ip_for(const std::string& hw_addr)
+std::optional<mp::IPAddress> mp::QemuPlatformDetail::get_ip_for(const std::string& hw_addr)
 {
     return dnsmasq_server->get_ip_for(hw_addr);
 }
@@ -169,18 +172,70 @@ QStringList mp::QemuPlatformDetail::vm_platform_args(const VirtualMachineDescrip
 
     name_to_net_device_map.emplace(vm_desc.vm_name, std::make_pair(tap_device_name, vm_desc.default_mac_address));
 
-    return QStringList() << "--enable-kvm"
-                         // Pass host CPU flags to VM
-                         << "-cpu"
-                         << "host"
-                         // Set up the network related args
-                         << "-nic"
-                         << QString::fromStdString(
-                                fmt::format("tap,ifname={},script=no,downscript=no,model=virtio-net-pci,mac={}",
-                                            tap_device_name, vm_desc.default_mac_address));
+    QStringList opts;
+
+    // Work around for Xenial where UEFI images are not one and the same
+    if (!(vm_desc.image.original_release == "16.04 LTS" && vm_desc.image.image_path.contains("disk1.img")))
+    {
+#if defined Q_PROCESSOR_X86
+        opts << "-bios"
+             << "OVMF.fd";
+#elif defined Q_PROCESSOR_ARM
+        opts << "-bios"
+             << "QEMU_EFI.fd";
+#endif
+    }
+
+    opts << "--enable-kvm"
+         // Pass host CPU flags to VM
+         << "-cpu"
+         << "host"
+         // Set up the network related args
+         << "-nic"
+         << QString::fromStdString(fmt::format("tap,ifname={},script=no,downscript=no,model=virtio-net-pci,mac={}",
+                                               tap_device_name, vm_desc.default_mac_address));
+
+    const auto bridge_helper_exec_path =
+        QDir(QCoreApplication::applicationDirPath()).filePath(BRIDGE_HELPER_EXEC_NAME_CPP);
+
+    for (const auto& extra_interface : vm_desc.extra_interfaces)
+    {
+        opts << "-nic"
+             << QString::fromStdString(fmt::format("bridge,br={},model=virtio-net-pci,mac={},helper={}",
+                                                   extra_interface.id,
+                                                   extra_interface.mac_address,
+                                                   bridge_helper_exec_path));
+    }
+
+    return opts;
 }
 
 mp::QemuPlatform::UPtr mp::QemuPlatformFactory::make_qemu_platform(const Path& data_dir) const
 {
     return std::make_unique<mp::QemuPlatformDetail>(data_dir);
+}
+
+bool mp::QemuPlatformDetail::is_network_supported(const std::string& network_type) const
+{
+    return network_type == "bridge" || network_type == "ethernet";
+}
+
+bool mp::QemuPlatformDetail::needs_network_prep() const
+{
+    return true;
+}
+
+void mp::QemuPlatformDetail::set_authorization(std::vector<NetworkInterfaceInfo>& networks)
+{
+    const auto& br_nomenclature = MP_PLATFORM.bridge_nomenclature();
+
+    for (auto& net : networks)
+        if (net.type == "ethernet" && !mpu::find_bridge_with(networks, net.id, br_nomenclature))
+            net.needs_authorization = true;
+}
+
+std::string mp::QemuPlatformDetail::create_bridge_with(const NetworkInterfaceInfo& interface) const
+{
+    assert(interface.type == "ethernet");
+    return MP_BACKEND.create_bridge_with(interface.id);
 }

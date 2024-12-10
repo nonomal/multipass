@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2017-2022 Canonical, Ltd.
+ * Copyright (C) Canonical, Ltd.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -22,7 +22,7 @@
 
 #include <multipass/client_cert_store.h>
 #include <multipass/constants.h>
-#include <multipass/default_vm_workflow_provider.h>
+#include <multipass/default_vm_blueprint_provider.h>
 #include <multipass/logging/log.h>
 #include <multipass/logging/standard_logger.h>
 #include <multipass/name_generator.h>
@@ -38,6 +38,7 @@
 
 #include <chrono>
 #include <memory>
+#include <optional>
 
 namespace mp = multipass;
 namespace mpl = multipass::logging;
@@ -63,7 +64,7 @@ std::unique_ptr<QNetworkProxy> discover_http_proxy()
     QString http_proxy{qgetenv("http_proxy")};
     if (http_proxy.isEmpty())
     {
-        // Some OS's are case senstive
+        // Some OS's are case sensitive
         http_proxy = qgetenv("HTTP_PROXY");
     }
 
@@ -107,22 +108,25 @@ std::unique_ptr<const mp::DaemonConfig> mp::DaemonConfigBuilder::build()
     auto multiplexing_logger = std::make_shared<mpl::MultiplexingLogger>(std::move(logger));
     mpl::set_logger(multiplexing_logger);
 
-    auto storage_path = QString::fromUtf8(qgetenv("MULTIPASS_STORAGE"));
+    auto storage_path = MP_PLATFORM.multipass_storage_location();
+    if (!storage_path.isEmpty())
+        MP_UTILS.make_dir(storage_path, QFileDevice::ReadOwner | QFileDevice::WriteOwner | QFileDevice::ExeOwner);
 
     if (cache_directory.isEmpty())
     {
         if (!storage_path.isEmpty())
-            cache_directory = mp::utils::make_dir(storage_path, "cache");
+            cache_directory = MP_UTILS.make_dir(storage_path, "cache");
         else
             cache_directory = MP_STDPATHS.writableLocation(StandardPaths::CacheLocation);
     }
     if (data_directory.isEmpty())
     {
         if (!storage_path.isEmpty())
-            data_directory = mp::utils::make_dir(storage_path, "data");
+            data_directory = MP_UTILS.make_dir(storage_path, "data");
         else
             data_directory = MP_STDPATHS.writableLocation(StandardPaths::AppDataLocation);
     }
+
     if (url_downloader == nullptr)
         url_downloader = std::make_unique<URLDownloader>(cache_directory, std::chrono::seconds{10});
     if (factory == nullptr)
@@ -131,14 +135,18 @@ std::unique_ptr<const mp::DaemonConfig> mp::DaemonConfigBuilder::build()
         update_prompt = platform::make_update_prompt();
     if (image_hosts.empty())
     {
-        image_hosts.push_back(std::make_unique<mp::CustomVMImageHost>(QSysInfo::currentCpuArchitecture(),
-                                                                      url_downloader.get(), manifest_ttl));
+        image_hosts.push_back(
+            std::make_unique<mp::CustomVMImageHost>(QSysInfo::currentCpuArchitecture(), url_downloader.get()));
         image_hosts.push_back(std::make_unique<mp::UbuntuVMImageHost>(
-            std::vector<std::pair<std::string, std::string>>{
-                {mp::release_remote, "https://cloud-images.ubuntu.com/releases/"},
-                {mp::daily_remote, "https://cloud-images.ubuntu.com/daily/"},
-                {mp::appliance_remote, "https://cdimage.ubuntu.com/ubuntu-core/appliances/"}},
-            url_downloader.get(), manifest_ttl));
+            std::vector<std::pair<std::string, UbuntuVMImageRemote>>{
+                {mp::release_remote, UbuntuVMImageRemote{"https://cloud-images.ubuntu.com/", "releases/",
+                                                         std::make_optional<QString>(mp::mirror_key)}},
+                {mp::daily_remote, UbuntuVMImageRemote{"https://cloud-images.ubuntu.com/", "daily/",
+                                                       std::make_optional<QString>(mp::mirror_key)}},
+                {mp::snapcraft_remote, UbuntuVMImageRemote{"https://cloud-images.ubuntu.com/", "buildd/daily/",
+                                                           std::make_optional<QString>(mp::mirror_key)}},
+                {mp::appliance_remote, UbuntuVMImageRemote{"https://cdimage.ubuntu.com/", "ubuntu-core/appliances/"}}},
+            url_downloader.get()));
     }
     if (vault == nullptr)
     {
@@ -149,7 +157,7 @@ std::unique_ptr<const mp::DaemonConfig> mp::DaemonConfigBuilder::build()
         }
 
         vault = factory->create_image_vault(
-            hosts, url_downloader.get(), mp::utils::make_dir(cache_directory, factory->get_backend_directory_name()),
+            hosts, url_downloader.get(), MP_UTILS.make_dir(cache_directory, factory->get_backend_directory_name()),
             mp::utils::backend_directory_path(data_directory, factory->get_backend_directory_name()), days_to_expire);
     }
     if (name_generator == nullptr)
@@ -159,7 +167,7 @@ std::unique_ptr<const mp::DaemonConfig> mp::DaemonConfigBuilder::build()
     if (ssh_key_provider == nullptr)
         ssh_key_provider = std::make_unique<OpenSSHKeyProvider>(data_directory);
     if (cert_provider == nullptr)
-        cert_provider = std::make_unique<mp::SSLCertProvider>(mp::utils::make_dir(data_directory, "certificates"),
+        cert_provider = std::make_unique<mp::SSLCertProvider>(MP_UTILS.make_dir(data_directory, "certificates"),
                                                               server_name_from(server_address));
     if (client_cert_store == nullptr)
         client_cert_store = std::make_unique<mp::ClientCertStore>(data_directory);
@@ -169,21 +177,21 @@ std::unique_ptr<const mp::DaemonConfig> mp::DaemonConfigBuilder::build()
     if (network_proxy == nullptr)
         network_proxy = discover_http_proxy();
 
-    if (workflow_provider == nullptr)
+    if (blueprint_provider == nullptr)
     {
-        auto workflow_provider_url = MP_PLATFORM.get_workflows_url_override();
+        auto blueprint_provider_url = MP_PLATFORM.get_blueprints_url_override();
 
-        if (!workflow_provider_url.isEmpty())
-            workflow_provider = std::make_unique<DefaultVMWorkflowProvider>(
-                QUrl(workflow_provider_url), url_downloader.get(), cache_directory, manifest_ttl);
+        if (!blueprint_provider_url.isEmpty())
+            blueprint_provider = std::make_unique<DefaultVMBlueprintProvider>(
+                QUrl(blueprint_provider_url), url_downloader.get(), cache_directory, manifest_ttl);
         else
-            workflow_provider =
-                std::make_unique<DefaultVMWorkflowProvider>(url_downloader.get(), cache_directory, manifest_ttl);
+            blueprint_provider =
+                std::make_unique<DefaultVMBlueprintProvider>(url_downloader.get(), cache_directory, manifest_ttl);
     }
 
     return std::unique_ptr<const DaemonConfig>(new DaemonConfig{
         std::move(url_downloader), std::move(factory), std::move(image_hosts), std::move(vault),
         std::move(name_generator), std::move(ssh_key_provider), std::move(cert_provider), std::move(client_cert_store),
-        std::move(update_prompt), multiplexing_logger, std::move(network_proxy), std::move(workflow_provider),
+        std::move(update_prompt), multiplexing_logger, std::move(network_proxy), std::move(blueprint_provider),
         cache_directory, data_directory, server_address, ssh_username, image_refresh_timer});
 }

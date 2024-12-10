@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2020-2022 Canonical, Ltd.
+ * Copyright (C) Canonical, Ltd.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -45,7 +45,6 @@ public:
     static constexpr auto PicturesLocation = StandardLocation::PicturesLocation;
     static constexpr auto TempLocation = StandardLocation::TempLocation;
     static constexpr auto HomeLocation = StandardLocation::HomeLocation;
-    static constexpr auto DataLocation = StandardLocation::DataLocation;
     static constexpr auto CacheLocation = StandardLocation::CacheLocation;
     static constexpr auto GenericCacheLocation = StandardLocation::GenericCacheLocation;
     static constexpr auto GenericDataLocation = StandardLocation::GenericDataLocation;

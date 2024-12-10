@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2017-2022 Canonical, Ltd.
+ * Copyright (C) Canonical, Ltd.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -30,15 +30,41 @@ public:
     QString os;
     QString release;
     QString release_title;
+    QString release_codename;
     bool supported;
     QString image_location;
-    QString kernel_location;
-    QString initrd_location;
     QString id;
     QString stream_location;
     QString version;
     int64_t size;
     bool verify;
 };
+
+inline bool operator==(const VMImageInfo& a, const VMImageInfo& b)
+{
+    return std::tie(a.aliases,
+                    a.os,
+                    a.release,
+                    a.release_title,
+                    a.release_codename,
+                    a.supported,
+                    a.image_location,
+                    a.id,
+                    a.stream_location,
+                    a.version,
+                    a.size,
+                    a.verify) == std::tie(b.aliases,
+                                          b.os,
+                                          b.release,
+                                          b.release_title,
+                                          b.release_codename,
+                                          b.supported,
+                                          b.image_location,
+                                          b.id,
+                                          b.stream_location,
+                                          b.version,
+                                          b.size,
+                                          b.verify);
 }
+} // namespace multipass
 #endif // MULTIPASS_VM_IMAGE_INFO_H

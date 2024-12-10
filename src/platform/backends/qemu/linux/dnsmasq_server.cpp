@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2018-2022 Canonical, Ltd.
+ * Copyright (C) Canonical, Ltd.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -82,7 +82,7 @@ mp::DNSMasqServer::~DNSMasqServer()
     }
 }
 
-mp::optional<mp::IPAddress> mp::DNSMasqServer::get_ip_for(const std::string& hw_addr)
+std::optional<mp::IPAddress> mp::DNSMasqServer::get_ip_for(const std::string& hw_addr)
 {
     // DNSMasq leases entries consist of:
     // <lease expiration> <mac addr> <ipv4> <name> * * *
@@ -96,9 +96,9 @@ mp::optional<mp::IPAddress> mp::DNSMasqServer::get_ip_for(const std::string& hw_
     {
         const auto fields = mp::utils::split(line, delimiter);
         if (fields.size() > 2 && fields[hw_addr_idx] == hw_addr)
-            return mp::optional<mp::IPAddress>{fields[ipv4_idx]};
+            return fields[ipv4_idx];
     }
-    return mp::nullopt;
+    return std::nullopt;
 }
 
 void mp::DNSMasqServer::release_mac(const std::string& hw_addr)
@@ -106,7 +106,7 @@ void mp::DNSMasqServer::release_mac(const std::string& hw_addr)
     auto ip = get_ip_for(hw_addr);
     if (!ip)
     {
-        mpl::log(mpl::Level::warning, "dnsmasq", fmt::format("attempting to release non-existant addr: {}", hw_addr));
+        mpl::log(mpl::Level::warning, "dnsmasq", fmt::format("attempting to release non-existent addr: {}", hw_addr));
         return;
     }
 

@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2021-2022 Canonical, Ltd.
+ * Copyright (C) Canonical, Ltd.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -32,8 +32,7 @@ class Alias final : public Command
 public:
     using Command::Command;
 
-    Alias(grpc::Channel& channel, Rpc::Stub& stub, Terminal* term, AliasDict& dict)
-        : Command(channel, stub, term), aliases(dict)
+    Alias(Rpc::StubInterface& stub, Terminal* term, AliasDict& dict) : Command(stub, term), aliases(dict)
     {
     }
 
@@ -44,7 +43,7 @@ public:
 
 private:
     InfoRequest info_request;
-    ParseCode parse_args(ArgParser* parser) override;
+    ParseCode parse_args(ArgParser* parser);
 
     AliasDict aliases;
     std::string alias_name;
