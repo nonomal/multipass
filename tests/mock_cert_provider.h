@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2021-2022 Canonical, Ltd.
+ * Copyright (C) Canonical, Ltd.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -62,12 +62,12 @@ struct MockCertProvider : public CertProvider
 {
     MockCertProvider()
     {
-        EXPECT_CALL(*this, PEM_certificate()).WillRepeatedly(Return(client_cert));
-        EXPECT_CALL(*this, PEM_signing_key()).WillRepeatedly(Return(client_key));
+        ON_CALL(*this, PEM_certificate).WillByDefault(Return(client_cert));
+        ON_CALL(*this, PEM_signing_key).WillByDefault(Return(client_key));
     }
 
-    MOCK_CONST_METHOD0(PEM_certificate, std::string());
-    MOCK_CONST_METHOD0(PEM_signing_key, std::string());
+    MOCK_METHOD(std::string, PEM_certificate, (), (override, const));
+    MOCK_METHOD(std::string, PEM_signing_key, (), (override, const));
 };
 } // namespace multipass::test
 #endif // MULTIPASS_MOCK_CERT_PROVIDER_H

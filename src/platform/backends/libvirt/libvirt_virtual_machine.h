@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2018-2022 Canonical, Ltd.
+ * Copyright (C) Canonical, Ltd.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -35,13 +35,16 @@ public:
     using DomainUPtr = std::unique_ptr<virDomain, decltype(virDomainFree)*>;
     using NetworkUPtr = std::unique_ptr<virNetwork, decltype(virNetworkFree)*>;
 
-    LibVirtVirtualMachine(const VirtualMachineDescription& desc, const std::string& bridge_name,
-                          VMStatusMonitor& monitor, const LibvirtWrapper::UPtr& libvirt_wrapper);
+    LibVirtVirtualMachine(const VirtualMachineDescription& desc,
+                          const std::string& bridge_name,
+                          VMStatusMonitor& monitor,
+                          const LibvirtWrapper::UPtr& libvirt_wrapper,
+                          const SSHKeyProvider& key_provider,
+                          const Path& instance_dir);
     ~LibVirtVirtualMachine();
 
     void start() override;
-    void stop() override;
-    void shutdown() override;
+    void shutdown(ShutdownPolicy shutdown_policy = ShutdownPolicy::Powerdown) override;
     void suspend() override;
     State current_state() override;
     int ssh_port() override;
@@ -49,18 +52,21 @@ public:
     std::string ssh_username() override;
     std::string management_ipv4() override;
     std::string ipv6() override;
-    void wait_until_ssh_up(std::chrono::milliseconds timeout) override;
     void ensure_vm_is_running() override;
     void update_state() override;
+    void update_cpus(int num_cores) override;
+    void resize_memory(const MemorySize& new_size) override;
+    void resize_disk(const MemorySize& new_size) override;
 
     static ConnectionUPtr open_libvirt_connection(const LibvirtWrapper::UPtr& libvirt_wrapper);
 
 private:
     DomainUPtr initialize_domain_info(virConnectPtr connection);
+    DomainUPtr checked_vm_domain() const;
 
     std::string mac_addr;
     const std::string username;
-    const VirtualMachineDescription desc;
+    VirtualMachineDescription desc;
     VMStatusMonitor* monitor;
     // Make this a reference since LibVirtVirtualMachineFactory can modify the name later
     const std::string& bridge_name;

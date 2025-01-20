@@ -1,4 +1,4 @@
-// Copyright © 2017-2022 Canonical Ltd.
+// Copyright (C) Canonical, Ltd.
 //
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU General Public License version 3 as
@@ -16,38 +16,35 @@
 syntax = "proto3";
 package multipass;
 
-service Rpc {
-    rpc create (LaunchRequest) returns (stream LaunchReply);
-    rpc launch (LaunchRequest) returns (stream LaunchReply);
-    rpc purge (PurgeRequest) returns (stream PurgeReply);
-    rpc find (FindRequest) returns (stream FindReply);
-    rpc info (InfoRequest) returns (stream InfoReply);
-    rpc list (ListRequest) returns (stream ListReply);
-    rpc networks (NetworksRequest) returns (stream NetworksReply);
-    rpc mount (MountRequest) returns (stream MountReply);
-    rpc ping (PingRequest) returns (PingReply);
-    rpc recover (RecoverRequest) returns (stream RecoverReply);
-    rpc ssh_info (SSHInfoRequest) returns (stream SSHInfoReply);
-    rpc start (StartRequest) returns (stream StartReply);
-    rpc stop (StopRequest) returns (stream StopReply);
-    rpc suspend (SuspendRequest) returns (stream SuspendReply);
-    rpc restart (RestartRequest) returns (stream RestartReply);
-    rpc delet (DeleteRequest) returns (stream DeleteReply);
-    rpc umount (UmountRequest) returns (stream UmountReply);
-    rpc version (VersionRequest) returns (stream VersionReply);
-    rpc get (GetRequest) returns (stream GetReply);
-    rpc authenticate (AuthenticateRequest) returns (stream AuthenticateReply);
-}
+import "google/protobuf/timestamp.proto";
 
-message OptInStatus {
-    enum Status {
-        UNKNOWN = 0;
-        PENDING = 1;
-        LATER = 2;
-        ACCEPTED = 3;
-        DENIED = 4;
-    }
-    Status opt_in_status = 1;
+service Rpc {
+    rpc create (stream LaunchRequest) returns (stream LaunchReply);
+    rpc launch (stream LaunchRequest) returns (stream LaunchReply);
+    rpc purge (stream PurgeRequest) returns (stream PurgeReply);
+    rpc find (stream FindRequest) returns (stream FindReply);
+    rpc info (stream InfoRequest) returns (stream InfoReply);
+    rpc list (stream ListRequest) returns (stream ListReply);
+    rpc networks (stream NetworksRequest) returns (stream NetworksReply);
+    rpc mount (stream MountRequest) returns (stream MountReply);
+    rpc ping (PingRequest) returns (PingReply);
+    rpc recover (stream RecoverRequest) returns (stream RecoverReply);
+    rpc ssh_info (stream SSHInfoRequest) returns (stream SSHInfoReply);
+    rpc start (stream StartRequest) returns (stream StartReply);
+    rpc stop (stream StopRequest) returns (stream StopReply);
+    rpc suspend (stream SuspendRequest) returns (stream SuspendReply);
+    rpc restart (stream RestartRequest) returns (stream RestartReply);
+    rpc delet (stream DeleteRequest) returns (stream DeleteReply);
+    rpc umount (stream UmountRequest) returns (stream UmountReply);
+    rpc version (stream VersionRequest) returns (stream VersionReply);
+    rpc get (stream GetRequest) returns (stream GetReply);
+    rpc set (stream SetRequest) returns (stream SetReply);
+    rpc keys (stream KeysRequest) returns (stream KeysReply);
+    rpc authenticate (stream AuthenticateRequest) returns (stream AuthenticateReply);
+    rpc snapshot (stream SnapshotRequest) returns (stream SnapshotReply);
+    rpc restore (stream RestoreRequest) returns (stream RestoreReply);
+    rpc clone (stream CloneRequest) returns (stream CloneReply);
+    rpc daemon_info (stream DaemonInfoRequest) returns (stream DaemonInfoReply);
 }
 
 message LaunchRequest {
@@ -60,7 +57,6 @@ message LaunchRequest {
     string time_zone = 7;
     string cloud_init_user_data = 8;
     string remote_name = 9;
-    OptInStatus opt_in_reply = 10;
     int32 verbosity_level = 11;
 
     message NetworkOptions {
@@ -76,16 +72,16 @@ message LaunchRequest {
     repeated NetworkOptions network_options = 12;
     bool permission_to_bridge = 13;
     int32 timeout = 14;
+    string password = 15;
 }
 
 message LaunchError {
     enum ErrorCodes {
         OK = 0;
-        INSTANCE_EXISTS = 1;
-        INVALID_MEM_SIZE = 2;
-        INVALID_DISK_SIZE = 3;
-        INVALID_HOSTNAME = 4;
-        INVALID_NETWORK = 5;
+        INVALID_MEM_SIZE = 1;
+        INVALID_DISK_SIZE = 2;
+        INVALID_HOSTNAME = 3;
+        INVALID_NETWORK = 4;
     }
     repeated ErrorCodes error_codes = 1;
 }
@@ -93,27 +89,12 @@ message LaunchError {
 message LaunchProgress {
     enum ProgressTypes {
         IMAGE = 0;
-        KERNEL = 1;
-        INITRD = 2;
-        EXTRACT = 3;
-        VERIFY = 4;
-        WAITING = 5;
+        EXTRACT = 1;
+        VERIFY = 2;
+        WAITING = 3;
     }
     ProgressTypes type = 1;
     string percent_complete = 2;
-}
-
-message MetricsShowInfo {
-    // TODO: Place holder for real host data
-    message HostInfo {
-        string release = 1;
-    }
-    // TODO: Place holder for real instance data
-    message InstanceInfo {
-        string release = 1;
-    }
-    HostInfo host_info = 1;
-    repeated InstanceInfo instances_info = 2;
 }
 
 message UpdateInfo {
@@ -124,17 +105,24 @@ message UpdateInfo {
 }
 
 message LaunchReply {
+    message Alias {
+        string name = 1;
+        string instance = 2;
+        string command = 3;
+        string working_directory = 4;
+    }
     oneof create_oneof {
         string vm_instance_name = 1;
         LaunchProgress launch_progress = 2;
         string create_message = 3;
     }
-    bool metrics_pending = 4;
-    MetricsShowInfo metrics_show_info = 5;
     string log_line = 6;
     UpdateInfo update_info = 7;
     string reply_message = 8;
     repeated string nets_need_bridging = 9;
+    repeated Alias aliases_to_be_created = 10;
+    repeated string workspaces_to_be_created = 11;
+    bool password_requested = 12;
 }
 
 message PurgeRequest {
@@ -151,6 +139,9 @@ message FindRequest {
     string remote_name = 2;
     int32 verbosity_level = 3;
     bool allow_unsupported = 4;
+    bool show_images = 5;
+    bool show_blueprints = 6;
+    bool force_manifest_network_download = 7;
 }
 
 message FindReply {
@@ -163,18 +154,25 @@ message FindReply {
         string release = 2;
         string version = 3;
         repeated AliasInfo aliases_info = 4;
+        string codename = 5;
     }
-    repeated ImageInfo images_info = 1;
-    string log_line = 2;
+    bool show_images = 1;
+    bool show_blueprints = 2;
+    repeated ImageInfo images_info = 3;
+    repeated ImageInfo blueprints_info = 4;
+    string log_line = 5;
 }
 
-message InstanceNames {
-    repeated string instance_name = 1;
+message InstanceSnapshotPair {
+    string instance_name = 1;
+    optional string snapshot_name = 2; // if this is present, the msg specifies a snapshot; otherwise, an instance
 }
 
 message InfoRequest {
-    InstanceNames instance_names = 1;
-    int32 verbosity_level = 2;
+    repeated InstanceSnapshotPair instance_snapshot_pairs = 1;
+    int32 verbosity_level = 3;
+    bool no_runtime_information = 4;
+    bool snapshots = 5;
 }
 
 message IdMap {
@@ -212,29 +210,59 @@ message InstanceStatus {
     Status status = 1;
 }
 
-message InfoReply {
-    message Info {
-        string name = 1;
-        InstanceStatus instance_status = 2;
-        string image_release = 3;
-        string current_release = 4;
-        string id = 5;
-        string load = 6;
-        string memory_usage = 7;
-        string memory_total = 8;
-        string disk_usage = 9;
-        string disk_total = 10;
-        repeated string ipv4 = 11;
-        repeated string ipv6 = 12;
-        MountInfo mount_info = 13;
+message InstanceDetails {
+    string image_release = 1;
+    string current_release = 2;
+    string id = 3;
+    string load = 4;
+    string memory_usage = 5;
+    string disk_usage = 6;
+    repeated string ipv4 = 7;
+    repeated string ipv6 = 8;
+    optional int32 num_snapshots = 9;
+    string cpu_times = 10;
+    string uptime = 11;
+    google.protobuf.Timestamp creation_timestamp = 12;
+}
+
+message SnapshotFundamentals {
+    string snapshot_name = 1;
+    string parent = 2;
+    string comment = 3;
+    google.protobuf.Timestamp creation_timestamp = 4;
+}
+
+message SnapshotDetails {
+    SnapshotFundamentals fundamentals = 1;
+    string size = 2;
+    repeated string children = 4;
+}
+
+message DetailedInfoItem {
+    string name = 1;
+    InstanceStatus instance_status = 2;
+    string memory_total = 3;
+    string disk_total = 4;
+    string cpu_count = 5;
+    MountInfo mount_info = 6;
+
+    oneof extra_info {
+        InstanceDetails instance_info = 7;
+        SnapshotDetails snapshot_info = 8;
     }
-    repeated Info info = 1;
-    string log_line = 2;
+}
+
+message InfoReply {
+    repeated DetailedInfoItem details = 1;
+    bool snapshots = 2; // useful to determine what entity (instance/snapshot) was absent when details are empty
+    string log_line = 3;
+    UpdateInfo update_info = 4;
 }
 
 message ListRequest {
     int32 verbosity_level = 1;
-    bool request_ipv4 = 2;
+    bool snapshots = 2;
+    bool request_ipv4 = 3;
 }
 
 message ListVMInstance {
@@ -245,12 +273,29 @@ message ListVMInstance {
     string current_release = 5;
 }
 
-message ListReply {
-    repeated ListVMInstance instances = 1;
-    string log_line = 2;
-    UpdateInfo update_info = 3;
+message ListVMSnapshot {
+    string name = 1;
+    SnapshotFundamentals fundamentals = 2;
 }
 
+message InstancesList {
+    repeated ListVMInstance instances = 1;
+}
+
+message SnapshotsList {
+    repeated ListVMSnapshot snapshots = 1;
+}
+
+message ListReply {
+    oneof list_contents
+    {
+        InstancesList instance_list = 1;
+        SnapshotsList snapshot_list = 2;
+    }
+
+    string log_line = 3;
+    UpdateInfo update_info = 4;
+}
 
 message NetworksRequest {
     int32 verbosity_level = 1;
@@ -274,21 +319,32 @@ message TargetPathInfo {
 }
 
 message MountRequest {
+    enum MountType {
+        CLASSIC = 0;
+        NATIVE = 1;
+    }
     string source_path = 1;
     repeated TargetPathInfo target_paths = 2;
     MountMaps mount_maps = 3;
     int32 verbosity_level = 4;
+    MountType mount_type = 5;
+    string password = 6;
 }
 
 message MountReply {
     string log_line = 1;
-    string mount_message = 2;
+    string reply_message = 2;
+    bool password_requested = 3;
 }
 
 message PingRequest {
 }
 
 message PingReply {
+}
+
+message InstanceNames {
+    repeated string instance_name = 1;
 }
 
 message RecoverRequest {
@@ -331,12 +387,14 @@ message StartRequest {
     InstanceNames instance_names = 1;
     int32 verbosity_level = 2;
     int32 timeout = 3;
+    string password = 4;
 }
 
 message StartReply {
     string log_line = 1;
     string reply_message = 2;
     UpdateInfo update_info = 3;
+    bool password_requested = 4;
 }
 
 message StopRequest {
@@ -344,6 +402,7 @@ message StopRequest {
     int32 time_minutes = 2;
     bool cancel_shutdown = 3;
     int32 verbosity_level = 4;
+    bool force_stop = 5;
 }
 
 message StopReply {
@@ -363,23 +422,27 @@ message RestartRequest {
     InstanceNames instance_names = 1;
     int32 verbosity_level = 2;
     int32 timeout = 3;
+    string password = 4;
 }
 
 message RestartReply {
     string log_line = 1;
     string reply_message = 2;
     UpdateInfo update_info = 3;
+    bool password_requested = 4;
 }
 
 message DeleteRequest {
-    InstanceNames instance_names = 1;
+    repeated InstanceSnapshotPair instance_snapshot_pairs = 1;
     bool purge = 2;
     int32 verbosity_level = 3;
+    bool purge_snapshots = 4;
 }
 
 message DeleteReply {
     string log_line = 1;
     repeated string purged_instances = 2;
+    bool confirm_snapshot_purging = 3;
 }
 
 message UmountRequest {
@@ -411,6 +474,28 @@ message GetReply {
     string log_line = 2;
 }
 
+message SetRequest {
+    string key = 1;
+    string val = 2;
+    int32 verbosity_level = 3;
+    bool authorized = 4;
+}
+
+message SetReply {
+    string log_line = 1;
+    string reply_message = 2;
+    bool needs_authorization = 3;
+}
+
+message KeysRequest {
+    int32 verbosity_level = 1;
+}
+
+message KeysReply {
+    string log_line = 1;
+    repeated string settings_keys = 2;
+}
+
 message AuthenticateRequest {
     string passphrase = 1;
     int32 verbosity_level = 2;
@@ -418,4 +503,50 @@ message AuthenticateRequest {
 
 message AuthenticateReply {
     string log_line = 1;
+}
+
+message SnapshotRequest {
+    string instance = 1;
+    string snapshot = 2;
+    string comment = 3;
+    int32 verbosity_level = 4;
+}
+
+message SnapshotReply {
+    string snapshot = 1; // automatically generated unless specifically requested
+    string log_line = 2;
+}
+
+message RestoreRequest {
+    string instance = 1;
+    string snapshot = 2;
+    bool destructive = 3;
+    int32 verbosity_level = 4;
+}
+
+message RestoreReply {
+    string log_line = 1;
+    string reply_message = 2;
+    bool confirm_destructive = 3;
+}
+
+message CloneRequest {
+    string source_name = 1;
+    optional string destination_name = 2;
+    int32 verbosity_level = 3;
+}
+
+message CloneReply {
+    string reply_message = 1;
+    string log_line = 2;
+}
+message DaemonInfoRequest {
+    int32 verbosity_level = 1;
+}
+
+message DaemonInfoReply {
+    string log_line = 1;
+    uint64 available_space = 2;
+    uint32 cpus = 3;
+    uint64 memory = 4;
 }

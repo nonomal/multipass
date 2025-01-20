@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2021-2022 Canonical, Ltd.
+ * Copyright (C) Canonical, Ltd.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -21,6 +21,8 @@
 #include <multipass/cli/alias_dict.h>
 #include <multipass/cli/command.h>
 
+#include <unordered_set>
+
 #include <QString>
 
 namespace multipass
@@ -32,8 +34,7 @@ class Unalias final : public Command
 public:
     using Command::Command;
 
-    Unalias(grpc::Channel& channel, Rpc::Stub& stub, Terminal* term, AliasDict& dict)
-        : Command(channel, stub, term), aliases(dict)
+    Unalias(Rpc::StubInterface& stub, Terminal* term, AliasDict& dict) : Command(stub, term), aliases(dict)
     {
     }
 
@@ -43,10 +44,19 @@ public:
     QString description() const override;
 
 private:
-    ParseCode parse_args(ArgParser* parser) override;
+    ParseCode parse_args(ArgParser* parser);
 
     AliasDict aliases;
-    std::string alias_to_remove;
+
+    struct str_pair_hash
+    {
+        inline std::size_t operator()(const std::pair<std::string, std::string> p) const
+        {
+            return std::hash<std::string>()(p.first) + std::hash<std::string>()(p.second);
+        }
+    };
+
+    std::vector<std::pair<std::string, std::string>> aliases_to_remove;
 };
 } // namespace cmd
 } // namespace multipass

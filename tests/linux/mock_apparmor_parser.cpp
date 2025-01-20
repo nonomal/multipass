@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2019-2022 Canonical, Ltd.
+ * Copyright (C) Canonical, Ltd.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -24,7 +24,7 @@ using namespace std;
 
 int main(int argc, char* argv[])
 {
-    // looks for version just to ensure existance
+    // looks for version just to ensure existence
     if (argc == 2 && strcmp(argv[1], "-V") == 0)
     {
         cout << "AppArmor parser version 1.11" << endl;

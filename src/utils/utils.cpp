@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2017-2022 Canonical, Ltd.
+ * Copyright (C) Canonical, Ltd.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -17,12 +17,13 @@
 
 #include <multipass/constants.h>
 #include <multipass/exceptions/autostart_setup_exception.h>
-#include <multipass/exceptions/exitless_sshprocess_exception.h>
-#include <multipass/exceptions/sshfs_missing_error.h>
+#include <multipass/exceptions/file_open_failed_exception.h>
+#include <multipass/exceptions/ssh_exception.h>
 #include <multipass/file_ops.h>
 #include <multipass/format.h>
 #include <multipass/logging/log.h>
-#include <multipass/settings.h>
+#include <multipass/network_interface_info.h>
+#include <multipass/platform.h>
 #include <multipass/ssh/ssh_session.h>
 #include <multipass/standard_paths.h>
 #include <multipass/utils.h>
@@ -41,48 +42,22 @@
 #include <cassert>
 #include <cctype>
 #include <fstream>
+#include <optional>
 #include <random>
 #include <regex>
 #include <sstream>
 
 #include <openssl/evp.h>
+#include <openssl/rand.h>
 
 namespace mp = multipass;
 namespace mpl = multipass::logging;
-
-using namespace std::chrono_literals;
 
 namespace
 {
 constexpr auto category = "utils";
 constexpr auto scrypt_hash_size{64};
-
-auto quote_for(const std::string& arg, mp::utils::QuoteType quote_type)
-{
-    if (quote_type == mp::utils::QuoteType::no_quotes)
-        return "";
-    return arg.find('\'') == std::string::npos ? "'" : "\"";
 }
-
-QString find_autostart_target(const QString& subdir, const QString& autostart_filename)
-{
-    const auto target_subpath = QDir{subdir}.filePath(autostart_filename);
-    const auto target_path = MP_STDPATHS.locate(mp::StandardPaths::GenericDataLocation, target_subpath);
-
-    if (target_path.isEmpty())
-    {
-        QString detail{};
-        for (const auto& path : MP_STDPATHS.standardLocations(mp::StandardPaths::GenericDataLocation))
-            detail += QStringLiteral("\n  ") + path + "/" + target_subpath;
-
-        throw mp::AutostartSetupException{fmt::format("could not locate the autostart file '{}'", autostart_filename),
-                                          fmt::format("Tried: {}", detail.toStdString())};
-    }
-
-    return target_path;
-}
-} // namespace
-
 mp::Utils::Utils(const Singleton<Utils>::PrivatePass& pass) noexcept : Singleton<Utils>::Singleton{pass}
 {
 }
@@ -132,37 +107,18 @@ void mp::Utils::make_file_with_content(const std::string& file_name, const std::
         throw std::runtime_error(fmt::format("failed to create dir '{}'", parent_dir.path()));
 
     if (!MP_FILEOPS.open(file, QFile::WriteOnly))
-        throw std::runtime_error(fmt::format("failed to open file '{}' for writing", file_name));
+        throw std::runtime_error(
+            fmt::format("failed to open file '{}' for writing: {}", file_name, file.errorString()));
 
+    // TODO use a QTextStream instead. Theoretically, this may fail to write it all in one go but still succeed.
+    // In practice, that seems unlikely. See https://stackoverflow.com/a/70933650 for more.
     if (MP_FILEOPS.write(file, content.c_str(), content.size()) != (qint64)content.size())
-        throw std::runtime_error(fmt::format("failed to write to file '{}'", file_name));
+        throw std::runtime_error(fmt::format("failed to write to file '{}': {}", file_name, file.errorString()));
 
-    return;
-}
+    if (!MP_FILEOPS.flush(file)) // flush manually to check return (which QFile::close ignores)
+        throw std::runtime_error(fmt::format("failed to flush file '{}': {}", file_name, file.errorString()));
 
-void mp::Utils::wait_for_cloud_init(mp::VirtualMachine* virtual_machine, std::chrono::milliseconds timeout,
-                                    const mp::SSHKeyProvider& key_provider) const
-{
-    auto action = [virtual_machine, &key_provider] {
-        virtual_machine->ensure_vm_is_running();
-        try
-        {
-            mp::SSHSession session{virtual_machine->ssh_hostname(), virtual_machine->ssh_port(),
-                                   virtual_machine->ssh_username(), key_provider};
-
-            std::lock_guard<decltype(virtual_machine->state_mutex)> lock{virtual_machine->state_mutex};
-            auto ssh_process = session.exec({"[ -e /var/lib/cloud/instance/boot-finished ]"});
-            return ssh_process.exit_code() == 0 ? mp::utils::TimeoutAction::done : mp::utils::TimeoutAction::retry;
-        }
-        catch (const std::exception& e)
-        {
-            std::lock_guard<decltype(virtual_machine->state_mutex)> lock{virtual_machine->state_mutex};
-            mpl::log(mpl::Level::warning, virtual_machine->vm_name, e.what());
-            return mp::utils::TimeoutAction::retry;
-        }
-    };
-    auto on_timeout = [] { throw std::runtime_error("timed out waiting for initialization to complete"); };
-    mp::utils::try_action_for(on_timeout, timeout, action);
+    return; // file closed, flush called again with errors ignored
 }
 
 std::string mp::Utils::get_kernel_version() const
@@ -189,17 +145,17 @@ QDir mp::utils::base_dir(const QString& path)
 
 bool mp::utils::valid_hostname(const std::string& name_string)
 {
-    QRegExp matcher("^([a-zA-Z]|[a-zA-Z][a-zA-Z0-9\\-]*[a-zA-Z0-9])");
+    QRegularExpression matcher{QRegularExpression::anchoredPattern("^([a-zA-Z]|[a-zA-Z][a-zA-Z0-9\\-]*[a-zA-Z0-9])")};
 
-    return matcher.exactMatch(QString::fromStdString(name_string));
+    return matcher.match(QString::fromStdString(name_string)).hasMatch();
 }
 
 bool mp::utils::invalid_target_path(const QString& target_path)
 {
     QString sanitized_path{QDir::cleanPath(target_path)};
-    QRegExp matcher("/+|/+(dev|proc|sys)(/.*)*|/+home(/*)(/ubuntu/*)*");
+    QRegularExpression matcher{QRegularExpression::anchoredPattern("/+|/+(dev|proc|sys)(/.*)*|/+home(/*)(/ubuntu/*)*")};
 
-    return matcher.exactMatch(sanitized_path);
+    return matcher.match(sanitized_path).hasMatch();
 }
 
 QTemporaryFile mp::utils::create_temp_file_with_path(const QString& filename_template)
@@ -216,23 +172,20 @@ QTemporaryFile mp::utils::create_temp_file_with_path(const QString& filename_tem
 
 std::string mp::utils::to_cmd(const std::vector<std::string>& args, QuoteType quote_type)
 {
+    if (args.empty())
+        return "";
+
     fmt::memory_buffer buf;
     for (auto const& arg : args)
     {
-        fmt::format_to(buf, "{0}{1}{0} ", quote_for(arg, quote_type), arg);
+        fmt::format_to(std::back_inserter(buf), "{0} ",
+                       quote_type == QuoteType::no_quotes ? arg : escape_for_shell(arg));
     }
 
     // Remove the last space inserted
     auto cmd = fmt::to_string(buf);
     cmd.pop_back();
     return cmd;
-}
-
-std::string& mp::utils::trim_end(std::string& s)
-{
-    auto rev_it = std::find_if(s.rbegin(), s.rend(), [](char ch) { return !std::isspace(ch); });
-    s.erase(rev_it.base(), s.end());
-    return s;
 }
 
 std::string& mp::utils::trim_newline(std::string& s)
@@ -242,26 +195,39 @@ std::string& mp::utils::trim_newline(std::string& s)
     return s;
 }
 
-std::string mp::utils::escape_char(const std::string& in, char c)
-{
-    return std::regex_replace(in, std::regex({c}), fmt::format("\\{}", c));
-}
-
 // Escape all characters which need to be escaped in the shell.
 std::string mp::utils::escape_for_shell(const std::string& in)
 {
+    // If the input string is empty, it means that the shell received an empty string enclosed in quotes and removed
+    // them. It must be quoted again for the shell to recognize it.
+    if (in.empty())
+    {
+        return "\'\'";
+    }
+
     std::string ret;
+
     std::back_insert_iterator<std::string> ret_insert = std::back_inserter(ret);
 
     for (char c : in)
     {
-        // If the character is in one of these code ranges, then it must be escaped.
-        if (c < 0x25 || c > 0x7a || (c > 0x25 && c < 0x2b) || (c > 0x5a && c < 0x5f) || 0x2c == c || 0x3b == c ||
-            0x3c == c || 0x3e == c || 0x3f == c || 0x60 == c)
+        if ('\n' == c) // newline
         {
-            *ret_insert++ = '\\';
+            *ret_insert++ = '"';  // double quotes
+            *ret_insert++ = '\n'; // newline
+            *ret_insert++ = '"';  // double quotes
         }
-        *ret_insert++ = c;
+        else
+        {
+            // If the character is in one of these code ranges, then it must be escaped.
+            if (c < 0x25 || c > 0x7a || (c > 0x25 && c < 0x2b) || (c > 0x5a && c < 0x5f) || 0x2c == c || 0x3b == c ||
+                0x3c == c || 0x3e == c || 0x3f == c || 0x60 == c)
+            {
+                *ret_insert++ = '\\'; // backslash
+            }
+
+            *ret_insert++ = c;
+        }
     }
 
     return ret;
@@ -293,136 +259,23 @@ bool mp::utils::valid_mac_address(const std::string& mac)
     return match.hasMatch();
 }
 
-void mp::utils::wait_until_ssh_up(VirtualMachine* virtual_machine, std::chrono::milliseconds timeout,
-                                  std::function<void()> const& ensure_vm_is_running)
-{
-    mpl::log(mpl::Level::debug, virtual_machine->vm_name, "Waiting for SSH to be up");
-    auto action = [virtual_machine, &ensure_vm_is_running] {
-        ensure_vm_is_running();
-        try
-        {
-            mp::SSHSession session{virtual_machine->ssh_hostname(1ms), virtual_machine->ssh_port()};
-
-            std::lock_guard<decltype(virtual_machine->state_mutex)> lock{virtual_machine->state_mutex};
-            virtual_machine->state = VirtualMachine::State::running;
-            virtual_machine->update_state();
-            return mp::utils::TimeoutAction::done;
-        }
-        catch (const std::exception&)
-        {
-            return mp::utils::TimeoutAction::retry;
-        }
-    };
-    auto on_timeout = [virtual_machine] {
-        std::lock_guard<decltype(virtual_machine->state_mutex)> lock{virtual_machine->state_mutex};
-        virtual_machine->state = VirtualMachine::State::unknown;
-        virtual_machine->update_state();
-        throw std::runtime_error(fmt::format("{}: timed out waiting for response", virtual_machine->vm_name));
-    };
-
-    mp::utils::try_action_for(on_timeout, timeout, action);
-}
-
-void mp::utils::install_sshfs_for(const std::string& name, mp::SSHSession& session,
-                                  const std::chrono::milliseconds timeout)
-{
-    mpl::log(mpl::Level::info, category, fmt::format("Installing the multipass-sshfs snap in \'{}\'", name));
-
-    // Check if snap support is installed in the instance
-    auto which_proc = session.exec("which snap");
-    if (which_proc.exit_code() != 0)
-    {
-        mpl::log(mpl::Level::warning, category, fmt::format("Snap support is not installed in \'{}\'", name));
-        throw std::runtime_error(
-            fmt::format("Snap support needs to be installed in \'{}\' in order to support mounts.\n"
-                        "Please see https://docs.snapcraft.io/installing-snapd for information on\n"
-                        "how to install snap support for your instance's distribution.\n\n"
-                        "If your distribution's instructions specify enabling classic snap support,\n"
-                        "please do that as well.\n\n"
-                        "Alternatively, install `sshfs` manually inside the instance.",
-                        name));
-    }
-
-    // Check if /snap exists for "classic" snap support
-    auto test_file_proc = session.exec("[ -e /snap ]");
-    if (test_file_proc.exit_code() != 0)
-    {
-        mpl::log(mpl::Level::warning, category, fmt::format("Classic snap support symlink is needed in \'{}\'", name));
-        throw std::runtime_error(
-            fmt::format("Classic snap support is not enabled for \'{}\'!\n\n"
-                        "Please see https://docs.snapcraft.io/installing-snapd for information on\n"
-                        "how to enable classic snap support for your instance's distribution.",
-                        name));
-    }
-
-    try
-    {
-        auto proc = session.exec("sudo snap install multipass-sshfs");
-        if (proc.exit_code(timeout) != 0)
-        {
-            auto error_msg = proc.read_std_error();
-            mpl::log(mpl::Level::warning, category,
-                     fmt::format("Failed to install \'multipass-sshfs\', error message: \'{}\'",
-                                 mp::utils::trim_end(error_msg)));
-            throw mp::SSHFSMissingError();
-        }
-    }
-    catch (const mp::ExitlessSSHProcessException&)
-    {
-        mpl::log(mpl::Level::info, category, fmt::format("Timeout while installing 'sshfs' in '{}'", name));
-    }
-}
-
 // Executes a given command on the given session. Returns the output of the command, with spaces and feeds trimmed.
-// Caveat emptor: if the command fails, an empty string is returned.
-std::string mp::utils::run_in_ssh_session(mp::SSHSession& session, const std::string& cmd)
+std::string mp::Utils::run_in_ssh_session(mp::SSHSession& session, const std::string& cmd, bool whisper) const
 {
-    mpl::log(mpl::Level::debug, category, fmt::format("executing '{}'", cmd));
-    auto proc = session.exec(cmd);
+    auto proc = session.exec(cmd, whisper);
 
-    if (proc.exit_code() != 0)
+    if (auto ec = proc.exit_code() != 0)
     {
-        auto error_msg = proc.read_std_error();
-        mpl::log(mpl::Level::warning, category,
-                 fmt::format("failed to run '{}', error message: '{}'", cmd, mp::utils::trim_end(error_msg)));
-        return std::string{};
+        auto error_msg = mp::utils::trim_end(proc.read_std_error());
+        mpl::log(mpl::Level::debug, category, fmt::format("failed to run '{}', error message: '{}'", cmd, error_msg));
+        throw mp::SSHExecFailure(error_msg, ec);
     }
 
     auto output = proc.read_std_output();
-    if (output.empty())
-    {
-        mpl::log(mpl::Level::warning, category, fmt::format("no output after running '{}'", cmd));
-        return std::string{};
-    }
-
     return mp::utils::trim_end(output);
 }
 
-void mp::utils::link_autostart_file(const QDir& link_dir, const QString& autostart_subdir,
-                                    const QString& autostart_filename)
-{
-    const auto link_path = link_dir.absoluteFilePath(autostart_filename);
-    const auto target_path = find_autostart_target(autostart_subdir, autostart_filename);
-
-    const auto link_info = QFileInfo{link_path};
-    const auto target_info = QFileInfo{target_path};
-    auto target_file = QFile{target_path};
-    auto link_file = QFile{link_path};
-
-    if (link_info.isSymLink() && link_info.symLinkTarget() != target_info.absoluteFilePath())
-        link_file.remove(); // get rid of outdated and broken links
-
-    if (!link_file.exists())
-    {
-        link_dir.mkpath(".");
-        if (!target_file.link(link_path))
-
-            throw mp::AutostartSetupException{fmt::format("failed to link file '{}' to '{}'", link_path, target_path),
-                                              fmt::format("Detail: {} (error code {})", strerror(errno), errno)};
-    }
-}
-
-mp::Path mp::utils::make_dir(const QDir& a_dir, const QString& name, const QFileDevice::Permissions permissions)
+mp::Path mp::Utils::make_dir(const QDir& a_dir, const QString& name, QFileDevice::Permissions permissions)
 {
     mp::Path dir_path;
     bool success{false};
@@ -445,13 +298,13 @@ mp::Path mp::utils::make_dir(const QDir& a_dir, const QString& name, const QFile
 
     if (permissions)
     {
-        QFile::setPermissions(dir_path, permissions);
+        MP_PLATFORM.set_permissions(dir_path, permissions);
     }
 
     return dir_path;
 }
 
-mp::Path mp::utils::make_dir(const QDir& dir, const QFileDevice::Permissions permissions)
+mp::Path mp::Utils::make_dir(const QDir& dir, QFileDevice::Permissions permissions)
 {
     return make_dir(dir, QString(), permissions);
 }
@@ -472,36 +325,55 @@ QString mp::utils::backend_directory_path(const mp::Path& path, const QString& s
     return mp::Path("%1/%2").arg(path).arg(subdirectory);
 }
 
-QString mp::utils::get_driver_str()
+QString mp::utils::get_multipass_storage()
 {
-    auto driver = qgetenv(mp::driver_env_var);
-    if (!driver.isEmpty())
-    {
-        mpl::log(mpl::Level::warning, "platform",
-                 fmt::format("{} is now ignored, please use `multipass set {}` instead.", mp::driver_env_var,
-                             mp::driver_key));
-    }
-    return MP_SETTINGS.get(mp::driver_key);
+    return QString::fromUtf8(qgetenv(mp::multipass_storage_env_var));
 }
 
-QString mp::utils::make_uuid()
+QString mp::utils::make_uuid(const std::optional<std::string>& seed)
 {
-    auto uuid = QUuid::createUuid().toString();
-
-    // Remove curly brackets enclosing uuid
-    return uuid.mid(1, uuid.size() - 2);
+    auto uuid = seed ? QUuid::createUuidV3(QUuid{}, QString::fromStdString(*seed)) : QUuid::createUuid();
+    return uuid.toString(QUuid::WithoutBraces);
 }
 
-std::string mp::utils::contents_of(const multipass::Path& file_path)
+std::string mp::utils::contents_of(const multipass::Path& file_path) // TODO this should protect against long contents
 {
     const std::string name{file_path.toStdString()};
     std::ifstream in(name, std::ios::in | std::ios::binary);
     if (!in)
-        throw std::runtime_error(fmt::format("failed to open file '{}': {}({})", name, strerror(errno), errno));
+        throw FileOpenFailedException(name);
 
     std::stringstream stream;
     stream << in.rdbuf();
     return stream.str();
+}
+
+std::string mp::Utils::contents_of(const multipass::Path& file_path) const
+{
+    return mp::utils::contents_of(file_path);
+}
+
+std::vector<uint8_t> mp::Utils::random_bytes(size_t len)
+{
+    std::vector<uint8_t> bytes(len, 0);
+
+#ifdef MULTIPASS_COMPILER_GCC
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wmaybe-uninitialized"
+#endif
+
+    RAND_bytes(bytes.data(), bytes.size());
+
+#ifdef MULTIPASS_COMPILER_GCC
+#pragma GCC diagnostic pop
+#endif
+
+    return bytes;
+}
+
+QString mp::Utils::make_uuid(const std::optional<std::string>& seed) const
+{
+    return mp::utils::make_uuid(seed);
 }
 
 bool mp::utils::has_only_digits(const std::string& value)
@@ -555,7 +427,7 @@ std::string mp::utils::match_line_for(const std::string& output, const std::stri
     return std::string{};
 }
 
-bool mp::utils::is_running(const VirtualMachine::State& state)
+bool mp::Utils::is_running(const VirtualMachine::State& state) const
 {
     return state == VirtualMachine::State::running || state == VirtualMachine::State::delayed_shutdown;
 }
@@ -566,7 +438,7 @@ void mp::utils::check_and_create_config_file(const QString& config_file_path)
 
     if (!config_file.exists())
     {
-        make_dir({}, QFileInfo{config_file_path}.dir().path()); // make sure parent dir is there
+        MP_UTILS.make_dir({}, QFileInfo{config_file_path}.dir().path()); // make sure parent dir is there
         config_file.open(QIODevice::WriteOnly);
     }
 }
@@ -619,19 +491,105 @@ bool mp::utils::process_log_on_error(const QString& program, const QStringList& 
     return true;
 }
 
-std::string mp::utils::emit_yaml(const YAML::Node& node)
+std::string mp::utils::get_resolved_target(mp::SSHSession& session, const std::string& target)
 {
-    YAML::Emitter emitter;
-    emitter.SetIndent(2);
-    emitter << node;
-    if (!emitter.good())
-        throw std::runtime_error{fmt::format("Failed to emit YAML: {}", emitter.GetLastError())};
+    std::string absolute;
 
-    emitter << YAML::Newline;
-    return emitter.c_str();
+    switch (target[0])
+    {
+    case '~':
+        absolute = MP_UTILS.run_in_ssh_session(
+            session,
+            fmt::format("echo ~{}", mp::utils::escape_for_shell(target.substr(1, target.size() - 1))));
+        break;
+    case '/':
+        absolute = target;
+        break;
+    default:
+        absolute =
+            MP_UTILS.run_in_ssh_session(session, fmt::format("echo $PWD/{}", mp::utils::escape_for_shell(target)));
+        break;
+    }
+
+    return absolute;
 }
 
-std::string mp::utils::emit_cloud_config(const YAML::Node& node)
+// Split a path into existing and to-be-created parts.
+std::pair<std::string, std::string> mp::utils::get_path_split(mp::SSHSession& session, const std::string& target)
 {
-    return fmt::format("#cloud-config\n{}\n", emit_yaml(node));
+    std::string absolute{get_resolved_target(session, target)};
+
+    std::string existing = MP_UTILS.run_in_ssh_session(
+        session,
+        fmt::format("sudo /bin/bash -c 'P={:?}; while [ ! -d \"$P/\" ]; do P=\"${{P%/*}}\"; done; echo $P/'",
+                    absolute));
+
+    return {existing,
+            QDir(QString::fromStdString(existing)).relativeFilePath(QString::fromStdString(absolute)).toStdString()};
+}
+
+// Create a directory on a given root folder.
+void mp::utils::make_target_dir(mp::SSHSession& session, const std::string& root, const std::string& relative_target)
+{
+    MP_UTILS.run_in_ssh_session(session,
+                                fmt::format("sudo /bin/bash -c 'cd {:?} && mkdir -p {:?}'", root, relative_target));
+}
+
+// Set ownership of all directories on a path starting on a given root.
+// Assume it is already created.
+void mp::utils::set_owner_for(mp::SSHSession& session, const std::string& root, const std::string& relative_target,
+                              int vm_user, int vm_group)
+{
+    MP_UTILS.run_in_ssh_session(session,
+                                fmt::format("sudo /bin/bash -c 'cd {:?} && chown -R {}:{} {:?}'",
+                                            root,
+                                            vm_user,
+                                            vm_group,
+                                            relative_target.substr(0, relative_target.find_first_of('/'))));
+}
+
+mp::Path mp::Utils::derive_instances_dir(const mp::Path& data_dir,
+                                         const mp::Path& backend_directory_name,
+                                         const mp::Path& instances_subdir) const
+{
+    if (backend_directory_name.isEmpty())
+        return QDir(data_dir).filePath(instances_subdir);
+    else
+        return QDir(QDir(data_dir).filePath(backend_directory_name)).filePath(instances_subdir);
+}
+
+void mp::Utils::sleep_for(const std::chrono::milliseconds& ms) const
+{
+    std::this_thread::sleep_for(ms);
+}
+
+bool mp::Utils::is_ipv4_valid(const std::string& ipv4) const
+{
+    try
+    {
+        (mp::IPAddress(ipv4));
+    }
+    catch (std::invalid_argument&)
+    {
+        return false;
+    }
+
+    return true;
+}
+
+mp::Path mp::Utils::default_mount_target(const Path& source) const
+{
+    return source.isEmpty() ? "" : QDir{QDir::cleanPath(source)}.dirName().prepend("/home/ubuntu/");
+}
+
+auto mp::utils::find_bridge_with(const std::vector<mp::NetworkInterfaceInfo>& networks,
+                                 const std::string& target_network,
+                                 const std::string& bridge_type) -> std::optional<mp::NetworkInterfaceInfo>
+{
+    const auto it = std::find_if(std::cbegin(networks),
+                                 std::cend(networks),
+                                 [&target_network, &bridge_type](const NetworkInterfaceInfo& info) {
+                                     return info.type == bridge_type && info.has_link(target_network);
+                                 });
+    return it == std::cend(networks) ? std::nullopt : std::make_optional(*it);
 }

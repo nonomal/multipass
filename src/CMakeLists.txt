@@ -1,4 +1,4 @@
-# Copyright © 2017-2022 Canonical Ltd.
+# Copyright (C) Canonical, Ltd.
 #
 # This program is free software: you can redistribute it and/or modify
 # it under the terms of the GNU General Public License version 3 as
@@ -23,15 +23,15 @@ add_subdirectory(client)
 add_subdirectory(daemon)
 add_subdirectory(iso)
 add_subdirectory(logging)
-add_subdirectory(metrics)
 add_subdirectory(network)
 add_subdirectory(petname)
 add_subdirectory(platform)
 add_subdirectory(process)
 add_subdirectory(rpc)
+add_subdirectory(settings)
 add_subdirectory(simplestreams)
 add_subdirectory(ssh)
 add_subdirectory(sshfs_mount)
 add_subdirectory(utils)
-add_subdirectory(workflow_provider)
+add_subdirectory(blueprint_provider)
 add_subdirectory(xz_decoder)

@@ -2,7 +2,7 @@
 name: Bug report
 about: Create a report to help us improve
 title: ''
-labels: bug
+labels: bug, needs triage
 assignees: ''
 
 ---
@@ -19,12 +19,13 @@ How, and what happened?
 What did you expect to happen?
 
 **Logs**
-Please provide logs from the daemon, see [accessing logs](https://multipass.run/docs/accessing-logs) on where to find them on your platform.
+Please provide logs from the daemon, see [accessing logs](https://canonical.com/multipass/docs/accessing-logs) on where to find them on your platform.
 
 **Additional info**
  - OS: [e.g. macOS 10.15]
 - `multipass version`
-- `multipass info --all`
+- `multipass info`
+- `multipass get local.driver`
 
 **Additional context**
 Add any other context about the problem here.

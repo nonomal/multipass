@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2021-2022 Canonical, Ltd.
+ * Copyright (C) Canonical, Ltd.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -37,10 +37,14 @@ public:
     explicit QemuPlatformDetail(const Path& data_dir);
     virtual ~QemuPlatformDetail();
 
-    optional<IPAddress> get_ip_for(const std::string& hw_addr) override;
+    std::optional<IPAddress> get_ip_for(const std::string& hw_addr) override;
     void remove_resources_for(const std::string& name) override;
     void platform_health_check() override;
     QStringList vm_platform_args(const VirtualMachineDescription& vm_desc) override;
+    bool is_network_supported(const std::string& network_type) const override;
+    bool needs_network_prep() const override;
+    std::string create_bridge_with(const NetworkInterfaceInfo& interface) const override;
+    void set_authorization(std::vector<NetworkInterfaceInfo>& networks) override;
 
 private:
     const QString bridge_name;

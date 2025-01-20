@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2019-2022 Canonical, Ltd.
+ * Copyright (C) Canonical, Ltd.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -32,6 +32,7 @@
 #include <src/platform/backends/lxd/lxd_virtual_machine_factory.h>
 
 #ifdef QEMU_ENABLED
+#include "tests/qemu/linux/mock_dnsmasq_server.h"
 #include <src/platform/backends/qemu/qemu_virtual_machine_factory.h>
 #define DEFAULT_FACTORY mp::QemuVirtualMachineFactory
 #define DEFAULT_DRIVER "qemu"
@@ -65,103 +66,16 @@ namespace
 {
 const auto backend_path = QStringLiteral("/tmp");
 
-void setup_driver_settings(const QString& driver)
-{
-    auto& expectation = EXPECT_CALL(mpt::MockSettings::mock_instance(), get(Eq(mp::driver_key)));
-    if (!driver.isEmpty())
-        expectation.WillRepeatedly(Return(driver));
-}
-
-// hold on to return until the change is to be discarded
-auto temporarily_change_env(const char* var_name, QByteArray var_value)
-{
-    auto guard = sg::make_scope_guard([var_name, var_save = qgetenv(var_name)]() noexcept { // terminate ok if it throws
-        qputenv(var_name, var_save);
-    });
-
-    qputenv(var_name, var_value);
-
-    return guard;
-}
-
-template <typename Guards>
-struct autostart_test_record
-{
-    autostart_test_record(const QDir& autostart_dir, const QString& autostart_filename,
-                          const QString& autostart_contents, Guards&& guards)
-        : autostart_dir{autostart_dir},
-          autostart_filename{autostart_filename},
-          autostart_contents{autostart_contents},
-          guards{std::forward<Guards>(guards)} // this should always move, since scope guards are not copyable
-    {
-    }
-
-    QDir autostart_dir;
-    QString autostart_filename;
-    QString autostart_contents;
-    Guards guards;
-};
-
-struct autostart_test_setup_error : public std::runtime_error
-{
-    using std::runtime_error::runtime_error;
-};
-
-auto setup_autostart_desktop_file_test()
-{
-    QDir test_dir{QDir::temp().filePath(QString{"%1_%2"}.arg(mp::client_name, "autostart_test"))};
-    if (test_dir.exists() || QFile{test_dir.path()}.exists()) // avoid touching this at all if it already exists
-        throw autostart_test_setup_error{fmt::format("Test dir or file already exists: {}", test_dir.path())}; /*
-                           use exception to abort the test, since ASSERTS only work in void-returning functions */
-
-    // Now mock filesystem tree and environment, reverting when done
-
-    auto guard_fs = sg::make_scope_guard([test_dir]() mutable noexcept { // std::terminate ok if this throws
-        test_dir.removeRecursively();                                    // succeeds if not there
-    });
-
-    QDir data_dir{test_dir.filePath("data")};
-    QDir config_dir{test_dir.filePath("config")};
-    auto guard_home = temporarily_change_env("HOME", "hide/me");
-    auto guard_xdg_config = temporarily_change_env("XDG_CONFIG_HOME", config_dir.path().toLatin1());
-    auto guard_xdg_data = temporarily_change_env("XDG_DATA_DIRS", data_dir.path().toLatin1());
-
-    QDir mp_data_dir{data_dir.filePath(mp::client_name)};
-    QDir autostart_dir{config_dir.filePath("autostart")};
-    EXPECT_TRUE(mp_data_dir.mkpath("."));   // this is where the directories are actually created
-    EXPECT_TRUE(autostart_dir.mkpath(".")); // idem
-
-    const auto autostart_filename = mp::platform::autostart_test_data();
-    const auto autostart_filepath = mp_data_dir.filePath(autostart_filename);
-    const auto autostart_contents = "Exec=multipass.gui --autostarting\n";
-
-    {
-        QFile autostart_file{autostart_filepath};
-        EXPECT_TRUE(autostart_file.open(QIODevice::WriteOnly)); // create desktop file to link against
-        EXPECT_EQ(autostart_file.write(autostart_contents), qstrlen(autostart_contents));
-    }
-
-    auto guards = std::make_tuple(std::move(guard_home), std::move(guard_xdg_config), std::move(guard_xdg_data),
-                                  std::move(guard_fs));
-    return autostart_test_record{autostart_dir, autostart_filename, autostart_contents, std::move(guards)};
-}
-
-void check_autostart_file(const QDir& autostart_dir, const QString& autostart_filename,
-                          const QString& autostart_contents)
-{
-    QFile f{autostart_dir.filePath(autostart_filename)};
-    ASSERT_TRUE(f.exists());
-    ASSERT_TRUE(f.open(QIODevice::ReadOnly | QIODevice::Text));
-
-    auto actual_contents = QString{f.readAll()};
-    EXPECT_EQ(actual_contents, autostart_contents);
-}
-
 struct PlatformLinux : public mpt::TestWithMockedBinPath
 {
     template <typename VMFactoryType>
-    void aux_test_driver_factory(const QString& driver = QStringLiteral(""))
+    void aux_test_driver_factory(const QString& driver)
     {
+#ifdef QEMU_ENABLED
+        const mpt::MockDNSMasqServerFactory::GuardedMock dnsmasq_server_factory_attr{
+            mpt::MockDNSMasqServerFactory::inject<NiceMock>()};
+#endif
+
         auto factory = mpt::MockProcessFactory::Inject();
         setup_driver_settings(driver);
 
@@ -171,27 +85,43 @@ struct PlatformLinux : public mpt::TestWithMockedBinPath
         EXPECT_TRUE(dynamic_cast<VMFactoryType*>(factory_ptr.get()));
     }
 
+    void setup_driver_settings(const QString& driver)
+    {
+        EXPECT_CALL(mock_settings, get(Eq(mp::driver_key))).WillRepeatedly(Return(driver));
+    }
+
     void with_minimally_mocked_libvirt(std::function<void()> test_contents)
     {
         mp::LibvirtWrapper libvirt_wrapper{""};
         test_contents();
     }
 
-    mpt::UnsetEnvScope unset_env_scope{mp::driver_env_var};
+    mpt::MockSettings::GuardedMock mock_settings_injection = mpt::MockSettings::inject();
+    mpt::MockSettings& mock_settings = *mock_settings_injection.first;
     mpt::SetEnvScope disable_apparmor{"DISABLE_APPARMOR", "1"};
 };
 
 TEST_F(PlatformLinux, test_interpretation_of_winterm_setting_not_supported)
 {
-    for (const auto x : {"no", "matter", "what"})
-        EXPECT_THROW(mp::platform::interpret_setting(mp::winterm_key, x), mp::InvalidSettingsException);
+    for (const auto* x : {"no", "matter", "what"})
+        EXPECT_THROW(mp::platform::interpret_setting(mp::winterm_key, x), mp::InvalidSettingException);
 }
 
 TEST_F(PlatformLinux, test_interpretation_of_unknown_settings_not_supported)
 {
-    for (const auto k : {"unimaginable", "katxama", "katxatxa"})
-        for (const auto v : {"no", "matter", "what"})
-            EXPECT_THROW(mp::platform::interpret_setting(k, v), mp::InvalidSettingsException);
+    for (const auto* k : {"unimaginable", "katxama", "katxatxa"})
+        for (const auto* v : {"no", "matter", "what"})
+            EXPECT_THROW(mp::platform::interpret_setting(k, v), mp::InvalidSettingException);
+}
+
+TEST_F(PlatformLinux, test_no_extra_client_settings)
+{
+    EXPECT_THAT(MP_PLATFORM.extra_client_settings(), IsEmpty());
+}
+
+TEST_F(PlatformLinux, test_no_extra_daemon_settings)
+{
+    EXPECT_THAT(MP_PLATFORM.extra_daemon_settings(), IsEmpty());
 }
 
 TEST_F(PlatformLinux, test_empty_sync_winterm_profiles)
@@ -199,113 +129,19 @@ TEST_F(PlatformLinux, test_empty_sync_winterm_profiles)
     EXPECT_NO_THROW(mp::platform::sync_winterm_profiles());
 }
 
-TEST_F(PlatformLinux, test_autostart_desktop_file_properly_placed)
+TEST_F(PlatformLinux, test_default_driver)
 {
-    try
-    {
-        const auto& [autostart_dir, autostart_filename, autostart_contents, guards] =
-            setup_autostart_desktop_file_test();
-
-        ASSERT_FALSE(HasFailure()) << "autostart test setup failed";
-
-        mp::platform::setup_gui_autostart_prerequisites();
-        check_autostart_file(autostart_dir, autostart_filename, autostart_contents);
-    }
-    catch (autostart_test_setup_error& e)
-    {
-        FAIL() << e.what();
-    }
+    EXPECT_THAT(MP_PLATFORM.default_driver(), AnyOf("qemu", "lxd"));
 }
 
-TEST_F(PlatformLinux, test_autostart_setup_replaces_wrong_link)
+TEST_F(PlatformLinux, test_default_privileged_mounts)
 {
-    try
-    {
-        const auto& [autostart_dir, autostart_filename, autostart_contents, guards] =
-            setup_autostart_desktop_file_test();
-
-        ASSERT_FALSE(HasFailure()) << "autostart test setup failed";
-
-        const auto bad_filename = autostart_dir.filePath("wrong_file");
-        QFile bad_file{bad_filename};
-
-        EXPECT_TRUE(bad_file.open(QIODevice::WriteOnly)); // create desktop file to link against
-        bad_file.write("bad contents");
-        bad_file.close();
-
-        bad_file.link(autostart_dir.filePath(autostart_filename)); // link to a bad file
-
-        mp::platform::setup_gui_autostart_prerequisites();
-        check_autostart_file(autostart_dir, autostart_filename, autostart_contents);
-    }
-    catch (autostart_test_setup_error& e)
-    {
-        FAIL() << e.what();
-    }
-}
-
-TEST_F(PlatformLinux, test_autostart_setup_replaces_broken_link)
-{
-    try
-    {
-        const auto& [autostart_dir, autostart_filename, autostart_contents, guards] =
-            setup_autostart_desktop_file_test();
-
-        ASSERT_FALSE(HasFailure()) << "autostart test setup failed";
-
-        const auto bad_filename = autostart_dir.filePath("absent_file");
-        QFile bad_file{bad_filename};
-        ASSERT_FALSE(bad_file.exists());
-        bad_file.link(autostart_dir.filePath(autostart_filename)); // link to absent file
-        ASSERT_FALSE(bad_file.exists());
-
-        mp::platform::setup_gui_autostart_prerequisites();
-        check_autostart_file(autostart_dir, autostart_filename, autostart_contents);
-    }
-    catch (autostart_test_setup_error& e)
-    {
-        FAIL() << e.what();
-    }
-}
-
-TEST_F(PlatformLinux, test_autostart_setup_leaves_non_link_file_alone)
-{
-    try
-    {
-        const auto& [autostart_dir, autostart_filename, autostart_contents, guards] =
-            setup_autostart_desktop_file_test();
-
-        ASSERT_FALSE(HasFailure()) << "autostart test setup failed";
-
-        const auto replacement_contents = "replacement contents";
-
-        {
-            QFile replacement_file{autostart_dir.filePath(autostart_filename)};
-            ASSERT_FALSE(replacement_file.exists());
-            ASSERT_TRUE(replacement_file.open(QIODevice::WriteOnly)); // create desktop file to link against
-            ASSERT_EQ(replacement_file.write(replacement_contents), qstrlen(replacement_contents));
-        }
-
-        mp::platform::setup_gui_autostart_prerequisites();
-        check_autostart_file(autostart_dir, autostart_filename, replacement_contents);
-    }
-    catch (autostart_test_setup_error& e)
-    {
-        FAIL() << e.what();
-    }
-}
-
-TEST_F(PlatformLinux, test_autostart_setup_fails_on_absent_desktop_target)
-{
-    const auto guard_xdg = temporarily_change_env("XDG_DATA_DIRS", "/dadgad/bad/dir");
-    const auto guard_home = temporarily_change_env("HOME", "dadgbd/bad/too");
-
-    EXPECT_THROW(mp::platform::setup_gui_autostart_prerequisites(), mp::AutostartSetupException);
+    EXPECT_EQ(MP_PLATFORM.default_privileged_mounts(), "true");
 }
 
 TEST_F(PlatformLinux, test_default_driver_produces_correct_factory)
 {
-    aux_test_driver_factory<DEFAULT_FACTORY>();
+    aux_test_driver_factory<DEFAULT_FACTORY>(DEFAULT_DRIVER);
 }
 
 #ifdef QEMU_ENABLED
@@ -339,17 +175,17 @@ TEST_F(PlatformLinux, test_libvirt_in_env_var_is_ignored)
     aux_test_driver_factory<DEFAULT_FACTORY>(DEFAULT_DRIVER);
 }
 
-TEST_F(PlatformLinux, workflowsURLOverrideSetReturnsExpectedData)
+TEST_F(PlatformLinux, blueprintsURLOverrideSetReturnsExpectedData)
 {
     const QString fake_url{"https://a.fake.url"};
-    mpt::SetEnvScope workflows_url("MULTIPASS_WORKFLOWS_URL", fake_url.toUtf8());
+    mpt::SetEnvScope blueprints_url("MULTIPASS_BLUEPRINTS_URL", fake_url.toUtf8());
 
-    EXPECT_EQ(MP_PLATFORM.get_workflows_url_override(), fake_url);
+    EXPECT_EQ(MP_PLATFORM.get_blueprints_url_override(), fake_url);
 }
 
-TEST_F(PlatformLinux, workflowsURLOverrideNotSetReturnsEmptyString)
+TEST_F(PlatformLinux, blueprintsURLOverrideNotSetReturnsEmptyString)
 {
-    EXPECT_TRUE(MP_PLATFORM.get_workflows_url_override().isEmpty());
+    EXPECT_TRUE(MP_PLATFORM.get_blueprints_url_override().isEmpty());
 }
 
 TEST_F(PlatformLinux, test_is_remote_supported_returns_true)
@@ -398,18 +234,7 @@ TEST_F(PlatformLinux, test_is_alias_supported_returns_true)
     EXPECT_TRUE(MP_PLATFORM.is_alias_supported("focal", "release"));
 }
 
-TEST_F(PlatformLinux, test_is_alias_supported_lxd)
-{
-    setup_driver_settings("lxd");
-
-    EXPECT_TRUE(MP_PLATFORM.is_alias_supported("focal", "release"));
-    EXPECT_TRUE(MP_PLATFORM.is_alias_supported("core18", "snapcraft"));
-    EXPECT_TRUE(MP_PLATFORM.is_alias_supported("core20", "snapcraft"));
-    EXPECT_FALSE(MP_PLATFORM.is_alias_supported("core", "snapcraft"));
-    EXPECT_FALSE(MP_PLATFORM.is_alias_supported("16.04", "snapcraft"));
-}
-
-struct TestUnsupportedDrivers : public TestWithParam<QString>
+struct TestUnsupportedDrivers : public PlatformLinux, WithParamInterface<QString>
 {
 };
 
@@ -422,7 +247,7 @@ TEST_P(TestUnsupportedDrivers, test_unsupported_driver)
 }
 
 INSTANTIATE_TEST_SUITE_P(PlatformLinux, TestUnsupportedDrivers,
-                         Values(QStringLiteral("hyperkit"), QStringLiteral("hyper-v"), QStringLiteral("other")));
+                         Values(QStringLiteral("hyper-v"), QStringLiteral("other")));
 
 TEST_F(PlatformLinux, retrieves_empty_bridges)
 {
@@ -431,7 +256,7 @@ TEST_F(PlatformLinux, retrieves_empty_bridges)
 
     QDir fake_sys_class_net{tmp_dir.path()};
     QDir bridge_dir{fake_sys_class_net.filePath(fake_bridge)};
-    ASSERT_EQ(mpt::make_file_with_content(bridge_dir.filePath("type"), "1"), 1);
+    mpt::make_file_with_content(bridge_dir.filePath("type"), "1");
     ASSERT_TRUE(bridge_dir.mkpath("bridge"));
 
     auto net_map = mp::platform::detail::get_network_interfaces_from(fake_sys_class_net.path());
@@ -450,7 +275,7 @@ TEST_F(PlatformLinux, retrieves_ethernet_devices)
     const auto fake_eth = "someth";
 
     QDir fake_sys_class_net{tmp_dir.path()};
-    ASSERT_EQ(mpt::make_file_with_content(fake_sys_class_net.filePath(fake_eth) + "/type", "1"), 1);
+    mpt::make_file_with_content(fake_sys_class_net.filePath(fake_eth) + "/type", "1");
 
     auto net_map = mp::platform::detail::get_network_interfaces_from(fake_sys_class_net.path());
 
@@ -481,7 +306,7 @@ TEST_F(PlatformLinux, does_not_retrieve_other_virtual)
     const auto fake_virt = "somevirt";
 
     QDir fake_sys_class_net{tmp_dir.path() + "/virtual"};
-    ASSERT_EQ(mpt::make_file_with_content(fake_sys_class_net.filePath(fake_virt) + "/type", "1"), 1);
+    mpt::make_file_with_content(fake_sys_class_net.filePath(fake_virt) + "/type", "1");
 
     EXPECT_THAT(mp::platform::detail::get_network_interfaces_from(fake_sys_class_net.path()), IsEmpty());
 }
@@ -493,7 +318,7 @@ TEST_F(PlatformLinux, does_not_retrieve_wireless)
 
     QDir fake_sys_class_net{tmp_dir.path()};
     QDir wifi_dir{fake_sys_class_net.filePath(fake_wifi)};
-    ASSERT_EQ(mpt::make_file_with_content(wifi_dir.filePath("type"), "1"), 1);
+    mpt::make_file_with_content(wifi_dir.filePath("type"), "1");
     ASSERT_TRUE(wifi_dir.mkpath("wireless"));
 
     EXPECT_THAT(mp::platform::detail::get_network_interfaces_from(fake_sys_class_net.path()), IsEmpty());
@@ -505,7 +330,7 @@ TEST_F(PlatformLinux, does_not_retrieve_protocols)
     const auto fake_net = "somenet";
 
     QDir fake_sys_class_net{tmp_dir.path()};
-    ASSERT_EQ(mpt::make_file_with_content(fake_sys_class_net.filePath(fake_net) + "/type", "32"), 2);
+    mpt::make_file_with_content(fake_sys_class_net.filePath(fake_net) + "/type", "32");
 
     EXPECT_THAT(mp::platform::detail::get_network_interfaces_from(fake_sys_class_net.path()), IsEmpty());
 }
@@ -518,9 +343,8 @@ TEST_F(PlatformLinux, does_not_retrieve_other_specified_device_types)
 
     QDir fake_sys_class_net{tmp_dir.path()};
     QDir net_dir{fake_sys_class_net.filePath(fake_net)};
-    ASSERT_EQ(mpt::make_file_with_content(net_dir.filePath("type"), "1"), 1);
-    ASSERT_EQ(mpt::make_file_with_content(net_dir.filePath("uevent"), uevent_contents),
-              static_cast<int64_t>(uevent_contents.size()));
+    mpt::make_file_with_content(net_dir.filePath("type"), "1");
+    mpt::make_file_with_content(net_dir.filePath("uevent"), uevent_contents);
 
     auto net_map = mp::platform::detail::get_network_interfaces_from(fake_sys_class_net.path());
 
@@ -540,7 +364,7 @@ TEST_P(BridgeMemberTest, retrieves_bridges_with_members)
     QDir interface_dir{fake_sys_class_net.filePath(fake_bridge)};
     QDir members_dir{interface_dir.filePath("brif")};
 
-    ASSERT_EQ(mpt::make_file_with_content(interface_dir.filePath("type"), "1"), 1);
+    mpt::make_file_with_content(interface_dir.filePath("type"), "1");
     ASSERT_TRUE(interface_dir.mkpath("bridge"));
     ASSERT_TRUE(members_dir.mkpath("."));
 
@@ -555,7 +379,7 @@ TEST_P(BridgeMemberTest, retrieves_bridges_with_members)
 
         if (recognized)
         {
-            ASSERT_EQ(mpt::make_file_with_content(member_dir.filePath("type"), "1"), 1);
+            mpt::make_file_with_content(member_dir.filePath("type"), "1");
 
             substrs_matchers.push_back(HasSubstr(member));
             network_matchers.push_back(Field(&net_value_type::first, member));
@@ -712,6 +536,7 @@ TEST_F(PlatformLinux, read_os_release_from_file_not_found)
 
     auto [mock_file_ops, guard] = mpt::MockFileOps::inject();
     EXPECT_CALL(*mock_file_ops, open(_, _)).Times(2).WillRepeatedly(Return(false));
+    EXPECT_CALL(*mock_file_ops, is_open(testing::A<const QFile&>())).WillOnce(Return(false));
 
     auto output = multipass::platform::detail::read_os_release();
 
@@ -727,7 +552,7 @@ TEST_F(PlatformLinux, read_os_release_from_file)
 
     InSequence seq;
     EXPECT_CALL(*mock_file_ops, open(_, _)).WillOnce(Return(true));
-    EXPECT_CALL(*mock_file_ops, is_open).WillOnce(Return(true));
+    EXPECT_CALL(*mock_file_ops, is_open(testing::A<const QFile&>())).WillOnce(Return(true));
 
     for (const auto& line : input)
         EXPECT_CALL(*mock_file_ops, read_line).WillOnce(Return(line)).RetiresOnSaturation();
@@ -754,7 +579,7 @@ TEST_F(PlatformLinux, create_alias_script_works_unconfined)
     EXPECT_CALL(mpt::MockStandardPaths::mock_instance(), writableLocation(mp::StandardPaths::AppLocalDataLocation))
         .WillOnce(Return(tmp_dir.path()));
 
-    EXPECT_NO_THROW(MP_PLATFORM.create_alias_script("alias_name", mp::AliasDefinition{"instance", "command"}));
+    EXPECT_NO_THROW(MP_PLATFORM.create_alias_script("alias_name", mp::AliasDefinition{"instance", "command", "map"}));
 
     QFile checked_script(tmp_dir.path() + "/bin/alias_name");
     checked_script.open(QFile::ReadOnly);
@@ -779,7 +604,7 @@ TEST_F(PlatformLinux, create_alias_script_works_confined)
 
     qputenv("SNAP_NAME", QByteArray{"multipass"});
     qputenv("SNAP_USER_COMMON", tmp_dir.path().toUtf8());
-    EXPECT_NO_THROW(MP_PLATFORM.create_alias_script("alias_name", mp::AliasDefinition{"instance", "command"}));
+    EXPECT_NO_THROW(MP_PLATFORM.create_alias_script("alias_name", mp::AliasDefinition{"instance", "command", "map"}));
 
     QFile checked_script(tmp_dir.path() + "/bin/alias_name");
     checked_script.open(QFile::ReadOnly);
@@ -807,7 +632,8 @@ TEST_F(PlatformLinux, create_alias_script_overwrites)
     EXPECT_CALL(*mock_file_ops, permissions(_)).WillOnce(Return(QFileDevice::ReadOwner | QFileDevice::WriteOwner));
     EXPECT_CALL(*mock_file_ops, setPermissions(_, _)).WillOnce(Return(true));
 
-    EXPECT_NO_THROW(MP_PLATFORM.create_alias_script("alias_name", mp::AliasDefinition{"instance", "other_command"}));
+    EXPECT_NO_THROW(
+        MP_PLATFORM.create_alias_script("alias_name", mp::AliasDefinition{"instance", "other_command", "map"}));
 }
 
 TEST_F(PlatformLinux, create_alias_script_throws_if_cannot_create_path)
@@ -816,8 +642,9 @@ TEST_F(PlatformLinux, create_alias_script_throws_if_cannot_create_path)
 
     EXPECT_CALL(*mock_file_ops, mkpath(_, _)).WillOnce(Return(false));
 
-    MP_EXPECT_THROW_THAT(MP_PLATFORM.create_alias_script("alias_name", mp::AliasDefinition{"instance", "command"}),
-                         std::runtime_error, mpt::match_what(HasSubstr("failed to create dir '")));
+    MP_EXPECT_THROW_THAT(
+        MP_PLATFORM.create_alias_script("alias_name", mp::AliasDefinition{"instance", "command", "map"}),
+        std::runtime_error, mpt::match_what(HasSubstr("failed to create dir '")));
 }
 
 TEST_F(PlatformLinux, create_alias_script_throws_if_cannot_write_script)
@@ -826,10 +653,11 @@ TEST_F(PlatformLinux, create_alias_script_throws_if_cannot_write_script)
 
     EXPECT_CALL(*mock_file_ops, mkpath(_, _)).WillOnce(Return(true));
     EXPECT_CALL(*mock_file_ops, open(_, _)).WillOnce(Return(true));
-    EXPECT_CALL(*mock_file_ops, write(_, _, _)).WillOnce(Return(747));
+    EXPECT_CALL(*mock_file_ops, write(A<QFile&>(), _, _)).WillOnce(Return(747));
 
-    MP_EXPECT_THROW_THAT(MP_PLATFORM.create_alias_script("alias_name", mp::AliasDefinition{"instance", "command"}),
-                         std::runtime_error, mpt::match_what(HasSubstr("failed to write to file '")));
+    MP_EXPECT_THROW_THAT(
+        MP_PLATFORM.create_alias_script("alias_name", mp::AliasDefinition{"instance", "command", "map"}),
+        std::runtime_error, mpt::match_what(HasSubstr("failed to write to file '")));
 }
 
 TEST_F(PlatformLinux, create_alias_script_throws_if_cannot_set_permissions)
@@ -841,8 +669,9 @@ TEST_F(PlatformLinux, create_alias_script_throws_if_cannot_set_permissions)
     EXPECT_CALL(*mock_file_ops, permissions(_)).WillOnce(Return(QFileDevice::ReadOwner | QFileDevice::WriteOwner));
     EXPECT_CALL(*mock_file_ops, setPermissions(_, _)).WillOnce(Return(false));
 
-    MP_EXPECT_THROW_THAT(MP_PLATFORM.create_alias_script("alias_name", mp::AliasDefinition{"instance", "command"}),
-                         std::runtime_error, mpt::match_what(HasSubstr("cannot set permissions to alias script '")));
+    MP_EXPECT_THROW_THAT(
+        MP_PLATFORM.create_alias_script("alias_name", mp::AliasDefinition{"instance", "command", "map"}),
+        std::runtime_error, mpt::match_what(HasSubstr("cannot set permissions to alias script '")));
 }
 
 TEST_F(PlatformLinux, remove_alias_script_works)

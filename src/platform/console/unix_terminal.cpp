@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2019-2022 Canonical, Ltd.
+ * Copyright (C) Canonical, Ltd.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -18,10 +18,13 @@
 #include "unix_terminal.h"
 
 #include <iostream>
+
+#include <termios.h>
 #include <unistd.h>
 
-namespace mp = multipass;
+#include "unix_console.h"
 
+namespace mp = multipass;
 
 int mp::UnixTerminal::cin_fd() const
 {
@@ -33,12 +36,30 @@ bool mp::UnixTerminal::cin_is_live() const
     return (isatty(cin_fd()) == 1);
 }
 
-int multipass::UnixTerminal::cout_fd() const
+int mp::UnixTerminal::cout_fd() const
 {
     return fileno(stdout);
 }
 
-bool multipass::UnixTerminal::cout_is_live() const
+bool mp::UnixTerminal::cout_is_live() const
 {
     return (isatty(cout_fd()) == 1);
+}
+
+void mp::UnixTerminal::set_cin_echo(const bool enable)
+{
+    struct termios tty;
+    tcgetattr(cin_fd(), &tty);
+
+    if (!enable)
+        tty.c_lflag &= ~ECHO;
+    else
+        tty.c_lflag |= ECHO;
+
+    tcsetattr(cin_fd(), TCSANOW, &tty);
+}
+
+mp::UnixTerminal::ConsolePtr mp::UnixTerminal::make_console(ssh_channel channel)
+{
+    return std::make_unique<UnixConsole>(channel, this);
 }

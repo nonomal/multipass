@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2017-2022 Canonical, Ltd.
+ * Copyright (C) Canonical, Ltd.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -50,18 +50,21 @@ public:
     URLDownloader(std::chrono::milliseconds timeout);
     URLDownloader(const Path& cache_dir, std::chrono::milliseconds timeout);
     virtual ~URLDownloader() = default;
+
+    // Note: All http urls are converted to https
     virtual void download_to(const QUrl& url, const QString& file_name, int64_t size, const int download_type,
                              const ProgressMonitor& monitor);
     virtual QByteArray download(const QUrl& url);
+    virtual QByteArray download(const QUrl& url, const bool is_force_update_from_network);
     virtual QDateTime last_modified(const QUrl& url);
     virtual void abort_all_downloads();
 
 protected:
-    std::atomic_bool abort_download{false};
+    std::atomic_bool abort_downloads{false};
 
 private:
     const Path cache_dir_path;
     std::chrono::milliseconds timeout;
 };
-}
+} // namespace multipass
 #endif // MULTIPASS_URL_DOWNLOADER_H

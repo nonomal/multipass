@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2019-2022 Canonical, Ltd.
+ * Copyright (C) Canonical, Ltd.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -25,7 +25,7 @@
 #include <multipass/exceptions/settings_exceptions.h>
 #include <multipass/platform.h> // temporary
 #include <multipass/rpc/multipass.grpc.pb.h>
-#include <multipass/settings.h>
+#include <multipass/settings/settings.h>
 
 namespace mp = multipass;
 namespace cmd = multipass::cmd;
@@ -64,7 +64,7 @@ QString cmd::Set::short_help() const
 QString cmd::Set::description() const
 {
     auto desc = QStringLiteral("Set, to the given value, the configuration setting corresponding to the given key.");
-    return desc + "\n\n" + describe_settings_keys();
+    return desc + "\n\n" + describe_common_settings_keys();
 }
 
 mp::ParseCode cmd::Set::parse_args(mp::ArgParser* parser)
@@ -86,7 +86,7 @@ mp::ParseCode cmd::Set::parse_args(mp::ArgParser* parser)
         }
         else
         {
-            const auto keyval = args.at(0).split('=', QString::KeepEmptyParts);
+            const auto keyval = args.at(0).split('=', Qt::KeepEmptyParts);
             if ((keyval.size() != 1 && keyval.size() != 2) || keyval[0].isEmpty())
             {
                 cerr << "Bad key-value format.\n";
@@ -110,10 +110,19 @@ mp::ParseCode cmd::Set::parse_args(mp::ArgParser* parser)
 
 mp::ParseCode cmd::Set::checked_prompt(const QString& key)
 {
-    mp::PlainPrompter prompter(term);
     try
     {
-        val = QString::fromStdString(prompter.prompt(key.toStdString()));
+        if (key == passphrase_key) // TODO integrate into setting handlers
+        {
+            mp::NewPassphrasePrompter prompter(term);
+            val = QString::fromStdString(prompter.prompt());
+        }
+        else
+        {
+            mp::PlainPrompter prompter(term);
+            val = QString::fromStdString(prompter.prompt(key.toStdString()));
+        }
+
         return ParseCode::Ok;
     }
     catch (const mp::PromptException& e)

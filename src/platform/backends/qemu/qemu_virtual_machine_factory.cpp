@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2017-2022 Canonical, Ltd.
+ * Copyright (C) Canonical, Ltd.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -18,12 +18,12 @@
 #include "qemu_virtual_machine_factory.h"
 #include "qemu_virtual_machine.h"
 
+#include <multipass/cloud_init_iso.h>
 #include <multipass/format.h>
 #include <multipass/logging/log.h>
 #include <multipass/platform.h>
 #include <multipass/process/simple_process_spec.h>
-#include <multipass/virtual_machine_description.h>
-
+#include <multipass/yaml_node_utils.h>
 #include <shared/qemu_img_utils/qemu_img_utils.h>
 
 #include <QRegularExpression>
@@ -37,17 +37,29 @@ constexpr auto category = "qemu factory";
 } // namespace
 
 mp::QemuVirtualMachineFactory::QemuVirtualMachineFactory(const mp::Path& data_dir)
-    : qemu_platform{MP_QEMU_PLATFORM_FACTORY.make_qemu_platform(data_dir)}
+    : QemuVirtualMachineFactory{MP_QEMU_PLATFORM_FACTORY.make_qemu_platform(data_dir), data_dir}
+{
+}
+
+mp::QemuVirtualMachineFactory::QemuVirtualMachineFactory(QemuPlatform::UPtr qemu_platform, const mp::Path& data_dir)
+    : BaseVirtualMachineFactory(
+          MP_UTILS.derive_instances_dir(data_dir, qemu_platform->get_directory_name(), instances_subdir)),
+      qemu_platform{std::move(qemu_platform)}
 {
 }
 
 mp::VirtualMachine::UPtr mp::QemuVirtualMachineFactory::create_virtual_machine(const VirtualMachineDescription& desc,
+                                                                               const SSHKeyProvider& key_provider,
                                                                                VMStatusMonitor& monitor)
 {
-    return std::make_unique<mp::QemuVirtualMachine>(desc, qemu_platform.get(), monitor);
+    return std::make_unique<mp::QemuVirtualMachine>(desc,
+                                                    qemu_platform.get(),
+                                                    monitor,
+                                                    key_provider,
+                                                    get_instance_directory(desc.vm_name));
 }
 
-void mp::QemuVirtualMachineFactory::remove_resources_for(const std::string& name)
+void mp::QemuVirtualMachineFactory::remove_resources_for_impl(const std::string& name)
 {
     qemu_platform->remove_resources_for(name);
 }
@@ -56,6 +68,7 @@ mp::VMImage mp::QemuVirtualMachineFactory::prepare_source_image(const mp::VMImag
 {
     VMImage image{source_image};
     image.image_path = mp::backend::convert_to_qcow_if_necessary(source_image.image_path);
+    mp::backend::amend_to_qcow2_v3(image.image_path);
     return image;
 }
 
@@ -70,7 +83,7 @@ void mp::QemuVirtualMachineFactory::hypervisor_health_check()
     qemu_platform->platform_health_check();
 }
 
-QString mp::QemuVirtualMachineFactory::get_backend_version_string()
+QString mp::QemuVirtualMachineFactory::get_backend_version_string() const
 {
     auto process =
         mp::platform::make_process(simple_process_spec(QString("qemu-system-%1").arg(HOST_ARCH), {"--version"}));
@@ -109,7 +122,51 @@ QString mp::QemuVirtualMachineFactory::get_backend_version_string()
     return QString("qemu-unknown");
 }
 
-QString mp::QemuVirtualMachineFactory::get_backend_directory_name()
+QString mp::QemuVirtualMachineFactory::get_backend_directory_name() const
 {
     return qemu_platform->get_directory_name();
+}
+
+auto mp::QemuVirtualMachineFactory::networks() const -> std::vector<NetworkInterfaceInfo>
+{
+    auto platform_ifs_info = MP_PLATFORM.get_network_interfaces_info();
+
+    std::vector<NetworkInterfaceInfo> ret;
+    for (const auto& ifs_info : platform_ifs_info)
+    {
+        const auto& info = ifs_info.second;
+        const auto& type = info.type;
+
+        if (qemu_platform->is_network_supported(type))
+            ret.push_back(info);
+    }
+
+    qemu_platform->set_authorization(ret);
+
+    return ret;
+}
+
+void mp::QemuVirtualMachineFactory::prepare_networking(std::vector<NetworkInterface>& extra_interfaces)
+{
+    if (qemu_platform->needs_network_prep())
+        mp::BaseVirtualMachineFactory::prepare_networking(extra_interfaces);
+}
+
+std::string mp::QemuVirtualMachineFactory::create_bridge_with(const NetworkInterfaceInfo& interface)
+{
+    return qemu_platform->create_bridge_with(interface);
+}
+
+mp::VirtualMachine::UPtr mp::QemuVirtualMachineFactory::clone_vm_impl(const std::string& /*source_vm_name*/,
+                                                                      const multipass::VMSpecs& /*src_vm_specs*/,
+                                                                      const VirtualMachineDescription& desc,
+                                                                      VMStatusMonitor& monitor,
+                                                                      const SSHKeyProvider& key_provider)
+{
+    return std::make_unique<mp::QemuVirtualMachine>(desc,
+                                                    qemu_platform.get(),
+                                                    monitor,
+                                                    key_provider,
+                                                    get_instance_directory(desc.vm_name),
+                                                    true);
 }

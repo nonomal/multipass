@@ -1,4 +1,4 @@
-# Copyright © 2017-2022 Canonical Ltd.
+# Copyright (C) Canonical, Ltd.
 #
 # This program is free software: you can redistribute it and/or modify
 # it under the terms of the GNU General Public License version 3 as
@@ -27,5 +27,6 @@ add_library(ip_address STATIC
 target_link_libraries(network
   fmt
   logger
-  Qt5::Core
-  Qt5::Network)
+  utils
+  Qt6::Core
+  Qt6::Network)

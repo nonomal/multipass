@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2017-2022 Canonical, Ltd.
+ * Copyright (C) Canonical, Ltd.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -17,7 +17,7 @@
 
 #include "daemon.h"
 #include "daemon_config.h"
-#include "daemon_monitor_settings.h" // temporary
+#include "daemon_init_settings.h"
 
 #include "cli.h"
 
@@ -76,12 +76,19 @@ int main_impl(int argc, char* argv[])
 
     UnixSignalHandler handler;
 
+    mp::daemon::register_global_settings_handlers();
+
     auto builder = mp::cli::parse(app);
     auto config = builder.build();
     auto server_address = config->server_address;
 
-    mp::monitor_and_quit_on_settings_change(); // temporary
+    mp::daemon::monitor_and_quit_on_settings_change(); // TODO replace with async restart in relevant settings handlers
     mp::Daemon daemon(std::move(config));
+    QObject::connect(&app,
+                     &QCoreApplication::aboutToQuit,
+                     &daemon,
+                     &mp::Daemon::shutdown_grpc_server,
+                     Qt::DirectConnection);
 
     mpl::log(mpl::Level::info, "daemon", fmt::format("Starting Multipass {}", mp::version_string));
     mpl::log(mpl::Level::info, "daemon", fmt::format("Daemon arguments: {}", app.arguments().join(" ")));

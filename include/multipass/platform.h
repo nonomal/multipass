@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2017-2022 Canonical, Ltd.
+ * Copyright (C) Canonical, Ltd.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -18,12 +18,13 @@
 #ifndef MULTIPASS_PLATFORM_H
 #define MULTIPASS_PLATFORM_H
 
-#include <multipass/cli/alias_definition.h>
+#include <multipass/alias_definition.h>
 #include <multipass/days.h>
 #include <multipass/logging/logger.h>
 #include <multipass/network_interface_info.h>
 #include <multipass/process/process.h>
 #include <multipass/process/process_spec.h>
+#include <multipass/settings/setting_spec.h>
 #include <multipass/singleton.h>
 #include <multipass/sshfs_server_config.h>
 #include <multipass/update_prompt.h>
@@ -52,35 +53,38 @@ public:
     Platform(const Singleton::PrivatePass&) noexcept;
     // Get information on the network interfaces that are seen by the platform, indexed by name
     virtual std::map<std::string, NetworkInterfaceInfo> get_network_interfaces_info() const;
-    virtual QString get_workflows_url_override() const;
+    virtual QString get_blueprints_url_override() const;
     virtual bool is_alias_supported(const std::string& alias, const std::string& remote) const;
     virtual bool is_remote_supported(const std::string& remote) const;
     virtual bool is_backend_supported(const QString& backend) const; // temporary (?)
     virtual int chown(const char* path, unsigned int uid, unsigned int gid) const;
     virtual int chmod(const char* path, unsigned int mode) const;
+    virtual bool set_permissions(const multipass::Path path, const QFileDevice::Permissions permissions) const;
     virtual bool link(const char* target, const char* link) const;
     virtual bool symlink(const char* target, const char* link, bool is_dir) const;
     virtual int utime(const char* path, int atime, int mtime) const;
+    virtual QString get_username() const;
     virtual QDir get_alias_scripts_folder() const;
     virtual void create_alias_script(const std::string& alias, const AliasDefinition& def) const;
     virtual void remove_alias_script(const std::string& alias) const;
     virtual std::string alias_path_message() const;
     virtual void set_server_socket_restrictions(const std::string& server_address, const bool restricted) const;
+    virtual QString multipass_storage_location() const;
+    virtual QString daemon_config_home() const; // temporary
+    virtual SettingSpec::Set extra_daemon_settings() const;
+    virtual SettingSpec::Set extra_client_settings() const;
+    virtual QString default_driver() const;
+    virtual QString default_privileged_mounts() const;
+    virtual bool is_image_url_supported() const;
+    [[nodiscard]] virtual std::string bridge_nomenclature() const;
+    virtual int get_cpus() const;
+    virtual long long get_total_ram() const;
 };
-
-std::map<QString, QString> extra_settings_defaults();
 
 QString interpret_setting(const QString& key, const QString& val);
 void sync_winterm_profiles();
 
-QString autostart_test_data(); // returns a platform-specific string, for testing purposes
-void setup_gui_autostart_prerequisites();
-
 std::string default_server_address();
-QString default_driver();
-QString default_privileged_mounts();
-
-QString daemon_config_home(); // temporary
 
 VirtualMachineFactory::UPtr vm_backend(const Path& data_dir);
 logging::Logger::UPtr make_logger(logging::Level level);
@@ -88,9 +92,13 @@ UpdatePrompt::UPtr make_update_prompt();
 std::unique_ptr<Process> make_sshfs_server_process(const SSHFSServerConfig& config);
 std::unique_ptr<Process> make_process(std::unique_ptr<ProcessSpec>&& process_spec);
 int symlink_attr_from(const char* path, sftp_attributes_struct* attr);
-bool is_image_url_supported();
 
-std::function<int()> make_quit_watchdog(); // call while single-threaded; call result later, in dedicated thread
+// Creates a function that will wait for signals or until the passed function returns false.
+// The passed function is checked every `period` milliseconds.
+// If a signal is received the optional contains it, otherwise the optional is empty.
+// `make_quit_watchdog` should only be called once.
+std::function<std::optional<int>(const std::function<bool()>&)> make_quit_watchdog(
+    const std::chrono::milliseconds& period); // call while single-threaded; call result later, in dedicated thread
 
 std::string reinterpret_interface_id(const std::string& ux_id); // give platforms a chance to reinterpret network IDs
 

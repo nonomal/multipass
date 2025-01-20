@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2017-2022 Canonical, Ltd.
+ * Copyright (C) Canonical, Ltd.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -35,6 +35,8 @@ int main_impl(int argc, char* argv[])
 
     mp::Console::setup_environment();
     auto term = mp::Terminal::make_terminal();
+
+    mp::client::register_global_settings_handlers();
 
     mp::ClientConfig config{mp::client::get_server_address(), mp::client::get_cert_provider(), term.get()};
     mp::Client client{config};

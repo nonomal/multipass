@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2017-2022 Canonical, Ltd.
+ * Copyright (C) Canonical, Ltd.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -28,8 +28,6 @@ class VMImage
 {
 public:
     Path image_path;
-    Path kernel_path;
-    Path initrd_path;
     std::string id;
     std::string original_release;
     std::string current_release;

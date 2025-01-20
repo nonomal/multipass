@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2017-2022 Canonical, Ltd.
+ * Copyright (C) Canonical, Ltd.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -30,8 +30,7 @@ class Delete final : public Command
 public:
     using Command::Command;
 
-    Delete(grpc::Channel& channel, Rpc::Stub& stub, Terminal* term, AliasDict& dict)
-        : Command(channel, stub, term), aliases(dict)
+    Delete(Rpc::StubInterface& stub, Terminal* term, AliasDict& dict) : Command(stub, term), aliases(dict)
     {
     }
 
@@ -44,8 +43,13 @@ public:
 private:
     AliasDict aliases;
     DeleteRequest request;
+    std::string instance_args;
+    std::string snapshot_args;
 
-    ParseCode parse_args(ArgParser* parser) override;
+    ParseCode parse_args(ArgParser* parser);
+    ParseCode parse_instances_snapshots(ArgParser* parser);
+    std::string generate_snapshot_purge_msg() const;
+    bool confirm_snapshot_purge() const;
 };
 } // namespace cmd
 } // namespace multipass

@@ -1,6 +1,14 @@
 .idea
-cmake-build-debug
+.vs
+.vscode
+cmake-build-*
 CMakeLists.txt.user
+build
+
+# package build artifacts
+*.deb
+*.buildinfo
+*.changes
 
 # only care about the encrypted file
 /tools/bot-data/*
@@ -11,3 +19,11 @@ parts
 prime
 stage
 snap/.snapcraft/state
+
+# Flutter build artifacts
+src/client/gui/lib/generated
+src/client/gui/build
+src/client/gui/.dart_tool
+src/client/gui/flutter*.log
+.flutter-plugins
+.flutter-plugins-dependencies

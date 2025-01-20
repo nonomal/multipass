@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2018-2022 Canonical, Ltd.
+ * Copyright (C) Canonical, Ltd.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -24,6 +24,7 @@
 #include <openssl/pem.h>
 #include <openssl/rand.h>
 #include <openssl/x509.h>
+#include <openssl/x509v3.h>
 
 #include <QFile>
 
@@ -52,7 +53,7 @@ public:
     }
 
 private:
-    std::unique_ptr<FILE, decltype(fclose)*> fp;
+    std::unique_ptr<FILE, std::function<int(FILE*)>> fp;
 };
 
 class EVPKey
@@ -105,29 +106,6 @@ private:
     std::unique_ptr<EVP_PKEY, decltype(EVP_PKEY_free)*> key{EVP_PKEY_new(), EVP_PKEY_free};
 };
 
-long random_long()
-{
-    long out{0};
-    std::array<uint8_t, 4> bytes;
-
-#ifdef MULTIPASS_COMPILER_GCC
-#pragma GCC diagnostic push
-#pragma GCC diagnostic ignored "-Wmaybe-uninitialized"
-#endif
-
-    RAND_bytes(bytes.data(), bytes.size());
-
-#ifdef MULTIPASS_COMPILER_GCC
-#pragma GCC diagnostic pop
-#endif
-
-    out |= bytes[0];
-    out |= bytes[1] << 8u;
-    out |= bytes[2] << 16u;
-    out |= bytes[3] << 24u;
-    return out;
-}
-
 std::vector<unsigned char> as_vector(const std::string& v)
 {
     return {v.begin(), v.end()};
@@ -140,6 +118,21 @@ std::string cn_name_from(const std::string& server_name)
     return server_name;
 }
 
+void set_san_name(X509* c, const std::string& server_name)
+{
+    std::string san_dns = server_name;
+    GENERAL_NAMES* gens = sk_GENERAL_NAME_new_null();
+    GENERAL_NAME* gen = GENERAL_NAME_new();
+    ASN1_IA5STRING* ia5 = ASN1_IA5STRING_new();
+    ASN1_STRING_set(ia5, san_dns.data(), san_dns.length());
+    GENERAL_NAME_set0_value(gen, GEN_DNS, ia5);
+    sk_GENERAL_NAME_push(gens, gen);
+
+    X509_add1_ext_i2d(c, NID_subject_alt_name, gens, 0, X509V3_ADD_DEFAULT);
+
+    GENERAL_NAMES_free(gens);
+}
+
 class X509Cert
 {
 public:
@@ -148,7 +141,14 @@ public:
         if (x509 == nullptr)
             throw std::runtime_error("Failed to allocate x509 cert structure");
 
-        ASN1_INTEGER_set(X509_get_serialNumber(x509.get()), random_long());
+        long big_num{0};
+        auto rand_bytes = MP_UTILS.random_bytes(4);
+        for (unsigned int i = 0; i < 4u; i++)
+            big_num |= rand_bytes[i] << i * 8u;
+
+        X509_set_version(x509.get(), 2);
+
+        ASN1_INTEGER_set(X509_get_serialNumber(x509.get()), big_num);
         X509_gmtime_adj(X509_get_notBefore(x509.get()), 0);
         X509_gmtime_adj(X509_get_notAfter(x509.get()), 31536000L);
 
@@ -164,6 +164,7 @@ public:
         X509_NAME_add_entry_by_txt(name, "O", MBSTRING_ASC, org.data(), org.size(), APPEND_ENTRY, ADD_RDN);
         X509_NAME_add_entry_by_txt(name, "CN", MBSTRING_ASC, cn.data(), cn.size(), APPEND_ENTRY, ADD_RDN);
         X509_set_issuer_name(x509.get(), name);
+        set_san_name(x509.get(), server_name);
 
         if (!X509_set_pubkey(x509.get(), key.get()))
             throw std::runtime_error("Failed to set certificate public key");

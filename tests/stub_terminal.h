@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2019-2022 Canonical, Ltd.
+ * Copyright (C) Canonical, Ltd.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -19,6 +19,8 @@
 #define MULTIPASS_STUB_TERMINAL_H
 
 #include <multipass/terminal.h>
+
+#include "stub_console.h"
 
 namespace multipass
 {
@@ -56,6 +58,16 @@ public:
     {
         return false;
     }
+
+    void set_cin_echo(const bool enable) override
+    {
+    }
+
+    ConsolePtr make_console(ssh_channel channel) override
+    {
+        return std::make_unique<StubConsole>();
+    }
+
 private:
     std::ostream &cout_stream;
     std::ostream& cerr_stream;

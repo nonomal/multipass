@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2019-2022 Canonical, Ltd.
+ * Copyright (C) Canonical, Ltd.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -18,11 +18,11 @@
 #include <iostream>
 #include <memory>
 #include <string>
-#include <unordered_set>
 
 #include <QStringList>
 
-#include "../ssh/ssh_client_key_provider.h" // FIXME
+#include "sshfs_mount.h"
+
 #include <multipass/exceptions/sshfs_missing_error.h>
 #include <multipass/id_mappings.h>
 #include <multipass/logging/log.h>
@@ -30,7 +30,8 @@
 #include <multipass/logging/standard_logger.h>
 #include <multipass/platform.h>
 #include <multipass/ssh/ssh_session.h>
-#include <multipass/sshfs_mount/sshfs_mount.h>
+
+#include <ssh/ssh_client_key_provider.h>
 
 namespace mp = multipass;
 namespace mpl = multipass::logging;
@@ -42,10 +43,9 @@ namespace
 mp::id_mappings convert_id_mappings(const char* in)
 {
     mp::id_mappings ret_map;
-    std::unordered_set<int> keys;
     QString input(in);
 
-    auto maps = input.split(',', QString::SkipEmptyParts);
+    auto maps = input.split(',', Qt::SkipEmptyParts);
     for (auto map : maps)
     {
         auto ids = map.split(":");
@@ -54,6 +54,7 @@ mp::id_mappings convert_id_mappings(const char* in)
             cerr << "Incorrect ID mapping syntax";
             continue;
         }
+
         bool ok1, ok2;
         int from = ids.first().toInt(&ok1);
         int to = ids.last().toInt(&ok2);
@@ -63,16 +64,7 @@ mp::id_mappings convert_id_mappings(const char* in)
             continue;
         }
 
-        if (keys.count(from))
-        {
-            cerr << "Repeated ID mapping ids found, ignored" << endl;
-            continue;
-        }
-        else
-        {
-            keys.insert(from);
-            ret_map.push_back({from, to});
-        }
+        ret_map.push_back({from, to});
     }
 
     return ret_map;
@@ -113,17 +105,22 @@ int main(int argc, char* argv[])
 
     try
     {
-        auto watchdog = mpp::make_quit_watchdog(); // called while there is only one thread
+        auto watchdog =
+            mpp::make_quit_watchdog(std::chrono::milliseconds{500}); // called while there is only one thread
 
         mp::SSHSession session{host, port, username, mp::SSHClientKeyProvider{priv_key_blob}};
-        mp::SshfsMount sshfs_mount(move(session), source_path, target_path, gid_mappings, uid_mappings);
+        mp::SshfsMount sshfs_mount(std::move(session), source_path, target_path, gid_mappings, uid_mappings);
 
         // ssh lives on its own thread, use this thread to listen for quit signal
-        if (int sig = watchdog())
-            cout << "Received signal " << sig << ". Stopping" << endl;
+        auto sig = watchdog([&sshfs_mount] { return sshfs_mount.alive(); });
+
+        if (sig.has_value())
+            cout << "Received signal " << *sig << ". Stopping" << endl;
+        else
+            cerr << "SFTP server thread stopped unexpectedly." << endl;
 
         sshfs_mount.stop();
-        exit(0);
+        exit(sig.has_value() ? EXIT_SUCCESS : EXIT_FAILURE);
     }
     catch (const mp::SSHFSMissingError&)
     {

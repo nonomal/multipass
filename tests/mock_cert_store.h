@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2021-2022 Canonical, Ltd.
+ * Copyright (C) Canonical, Ltd.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -24,10 +24,10 @@ namespace multipass::test
 {
 struct MockCertStore : public CertStore
 {
-    MOCK_METHOD1(add_cert, void(const std::string&));
-    MOCK_CONST_METHOD0(PEM_cert_chain, std::string());
-    MOCK_METHOD1(verify_cert, bool(const std::string&));
-    MOCK_METHOD0(empty, bool());
+    MOCK_METHOD(void, add_cert, (const std::string&), (override));
+    MOCK_METHOD(std::string, PEM_cert_chain, (), (const, override));
+    MOCK_METHOD(bool, verify_cert, (const std::string&), (override));
+    MOCK_METHOD(bool, empty, (), (override));
 };
 } // namespace multipass::test
 #endif // MULTIPASS_MOCK_CERT_STORE_H

@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2020-2022 Canonical, Ltd.
+ * Copyright (C) Canonical, Ltd.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -117,7 +117,7 @@ void mp::LocalSocketReply::abort()
     close();
 
     setError(OperationCanceledError, "Operation canceled");
-    emit error(OperationCanceledError);
+    emit errorOccurred(OperationCanceledError);
 
     setFinished(true);
     emit finished();
@@ -179,7 +179,7 @@ void mp::LocalSocketReply::send_request(const QNetworkRequest& request, QIODevic
     if (!local_socket_write(http_data))
         return;
 
-    if (op == "POST" || op == "PUT")
+    if (op == "POST" || op == "PUT" || op == "PATCH")
     {
         http_data = "Content-Type: " + request.header(QNetworkRequest::ContentTypeHeader).toByteArray() + "\r\n";
 
@@ -318,7 +318,7 @@ void mp::LocalSocketReply::parse_status(const QByteArray& status)
     if (!http_status_match.hasMatch())
     {
         setError(QNetworkReply::ProtocolFailure, "Malformed HTTP response from server");
-        emit error(QNetworkReply::ProtocolFailure);
+        emit errorOccurred(QNetworkReply::ProtocolFailure);
 
         return;
     }
@@ -331,7 +331,7 @@ void mp::LocalSocketReply::parse_status(const QByteArray& status)
         auto error_code = statusCodeFromHttp(statusCode);
 
         setError(error_code, http_status_match.captured("message"));
-        emit error(error_code);
+        emit errorOccurred(error_code);
     }
 }
 
@@ -341,7 +341,7 @@ bool mp::LocalSocketReply::local_socket_write(const QByteArray& data)
     if (bytes_written < 0)
     {
         setError(QNetworkReply::InternalServerError, local_socket->errorString());
-        emit error(QNetworkReply::InternalServerError);
+        emit errorOccurred(QNetworkReply::InternalServerError);
 
         return false;
     }

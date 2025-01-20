@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2017-2022 Canonical, Ltd.
+ * Copyright (C) Canonical, Ltd.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -32,7 +32,6 @@ class VMStatusMonitor : private DisabledCopyMove
 public:
     virtual ~VMStatusMonitor() = default;
     virtual void on_resume() = 0;
-    virtual void on_stop() = 0;
     virtual void on_shutdown() = 0;
     virtual void on_suspend() = 0;
     virtual void on_restart(const std::string& name) = 0;

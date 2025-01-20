@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2017-2022 Canonical, Ltd.
+ * Copyright (C) Canonical, Ltd.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -25,8 +25,8 @@ namespace
 {
 void clear_line(std::ostream& out)
 {
-    out << "\r" << std::setw(80) << " ";
-    out << "\r" << std::flush;
+    out << "\x1B[2K\x1B[0A";        // Delete current line
+    out << "\x1B[0E" << std::flush; // Move cursor to leftmost position of current line
 }
 }
 

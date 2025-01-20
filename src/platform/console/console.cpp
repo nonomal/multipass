@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2017-2022 Canonical, Ltd.
+ * Copyright (C) Canonical, Ltd.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -22,11 +22,6 @@
 #include "unix_terminal.h"
 
 namespace mp = multipass;
-
-mp::Console::UPtr mp::Console::make_console(ssh_channel channel, Terminal* term)
-{
-    return std::make_unique<UnixConsole>(channel, static_cast<UnixTerminal*>(term));
-}
 
 void mp::Console::setup_environment()
 {

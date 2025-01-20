@@ -1,4 +1,4 @@
-# Copyright © 2017-2022 Canonical Ltd.
+# Copyright (C) Canonical, Ltd.
 #
 # This program is free software: you can redistribute it and/or modify
 # it under the terms of the GNU General Public License version 3 as
@@ -20,9 +20,12 @@ add_library(daemon STATIC
   custom_image_host.cpp
   daemon.cpp
   daemon_config.cpp
-  daemon_monitor_settings.cpp
+  daemon_init_settings.cpp
   daemon_rpc.cpp
   default_vm_image_vault.cpp
+  instance_settings_handler.cpp
+  runtime_instance_info_helper.cpp
+  snapshot_settings_handler.cpp
   ubuntu_image_host.cpp)
 
 include_directories(daemon
@@ -33,17 +36,17 @@ target_link_libraries(daemon
   delayed_shutdown
   fmt
   logger
-  metrics
   petname
   platform
   rpc
+  settings
   simplestreams
   ssh
   sshfs_mount
   utils
-  Qt5::Core
-  Qt5::Network
-  workflow_provider
+  Qt6::Core
+  Qt6::Network
+  blueprint_provider
   xz_image_decoder
   yaml)
 
@@ -55,7 +58,7 @@ target_link_libraries(delayed_shutdown
   fmt
   logger
   ssh_common
-  Qt5::Core
+  Qt6::Core
 )
 
 add_executable(multipassd daemon_main.cpp)

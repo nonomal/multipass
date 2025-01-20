@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2019-2022 Canonical, Ltd.
+ * Copyright (C) Canonical, Ltd.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -25,13 +25,15 @@ namespace multipass
 class UnixTerminal : public Terminal
 {
 public:
-    virtual ~UnixTerminal() = default;
-
     int cin_fd() const;
     bool cin_is_live() const override;
 
     int cout_fd() const;
     bool cout_is_live() const override;
+
+    void set_cin_echo(const bool enable) override;
+
+    ConsolePtr make_console(ssh_channel channel) override;
 };
 } // namespace multipass
 

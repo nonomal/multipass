@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2020-2022 Canonical, Ltd.
+ * Copyright (C) Canonical, Ltd.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -88,53 +88,68 @@ public:
         ON_CALL(*this, supported_remotes()).WillByDefault(Return(remote));
     };
 
-    MOCK_METHOD1(info_for, optional<VMImageInfo>(const Query&));
-    MOCK_METHOD1(all_info_for, std::vector<std::pair<std::string, VMImageInfo>>(const Query&));
-    MOCK_METHOD1(info_for_full_hash, VMImageInfo(const std::string&));
-    MOCK_METHOD2(all_images_for, std::vector<VMImageInfo>(const std::string&, const bool));
-    MOCK_METHOD1(for_each_entry_do, void(const Action&));
-    MOCK_METHOD0(supported_remotes, std::vector<std::string>());
+    MOCK_METHOD(std::optional<VMImageInfo>, info_for, (const Query&), (override));
+    MOCK_METHOD((std::vector<std::pair<std::string, VMImageInfo>>), all_info_for, (const Query&), (override));
+    MOCK_METHOD(VMImageInfo, info_for_full_hash, (const std::string&), (override));
+    MOCK_METHOD(std::vector<VMImageInfo>, all_images_for, (const std::string&, const bool), (override));
+    MOCK_METHOD(void, for_each_entry_do, (const Action&), (override));
+    MOCK_METHOD(std::vector<std::string>, supported_remotes, (), (override));
+    MOCK_METHOD(void, update_manifests, (bool), (override));
 
     TempFile image;
-    TempFile kernel;
-    TempFile initrd;
     VMImageInfo mock_bionic_image_info{{default_alias},
                                        "Ubuntu",
                                        "bionic",
                                        default_release_info,
+                                       "Bionic Beaver",
                                        true,
                                        image.url(),
-                                       kernel.url(),
-                                       initrd.url(),
                                        default_id,
                                        default_stream_location,
                                        default_version,
                                        1,
                                        true};
-    VMImageInfo mock_snapcraft_image_info{
-        {snapcraft_alias}, "Ubuntu",           "core20", snapcraft_release_info,  true, image.url(), kernel.url(),
-        initrd.url(),      snapcraft_image_id, "",       snapcraft_image_version, 1,    true};
+    VMImageInfo mock_snapcraft_image_info{{snapcraft_alias},
+                                          "Ubuntu",
+                                          "core20",
+                                          snapcraft_release_info,
+                                          "Core 20",
+                                          true,
+                                          image.url(),
+                                          snapcraft_image_id,
+                                          "",
+                                          snapcraft_image_version,
+                                          1,
+                                          true};
     VMImageInfo mock_custom_image_info{{custom_alias},
                                        "Ubuntu",
                                        "Custom Core",
                                        custom_release_info,
+                                       "Custom Core",
                                        true,
                                        image.url(),
-                                       kernel.url(),
-                                       initrd.url(),
                                        custom_image_id,
                                        "",
                                        custom_image_version,
                                        1,
                                        false};
-    VMImageInfo mock_another_image_info{
-        {another_alias}, "Ubuntu",         "another", another_release_info,  true, image.url(), kernel.url(),
-        initrd.url(),    another_image_id, "",        another_image_version, 1,    false};
+    VMImageInfo mock_another_image_info{{another_alias},
+                                        "Ubuntu",
+                                        "another",
+                                        another_release_info,
+                                        "Another",
+                                        true,
+                                        image.url(),
+                                        another_image_id,
+                                        "",
+                                        another_image_version,
+                                        1,
+                                        false};
 
 private:
     std::vector<std::pair<std::string, VMImageInfo>> empty_image_info_vector_pair;
     std::vector<VMImageInfo> empty_image_info_vector;
-    VMImageInfo empty_vm_image_info{{}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, -1, {}};
+    VMImageInfo empty_vm_image_info{{}, {}, {}, {}, {}, {}, {}, {}, {}, {}, -1, {}};
     std::vector<std::string> remote{{"release"}};
 };
 } // namespace test

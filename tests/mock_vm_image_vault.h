@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2020-2022 Canonical, Ltd.
+ * Copyright (C) Canonical, Ltd.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -35,21 +35,32 @@ class MockVMImageVault : public VMImageVault
 public:
     MockVMImageVault()
     {
-        ON_CALL(*this, fetch_image(_, _, _, _)).WillByDefault([this](auto, auto, const PrepareAction& prepare, auto) {
-            return VMImage{dummy_image.name(), dummy_image.name(), dummy_image.name(), {}, {}, {}, {}, {}};
-        });
+        ON_CALL(*this, fetch_image(_, _, _, _, _, _, _))
+            .WillByDefault([this](auto, auto, const PrepareAction& prepare, auto, auto, auto, auto) {
+                return VMImage{dummy_image.name(), {}, {}, {}, {}, {}};
+            });
         ON_CALL(*this, has_record_for(_)).WillByDefault(Return(true));
         ON_CALL(*this, minimum_image_size_for(_)).WillByDefault(Return(MemorySize{"1048576"}));
     };
 
-    MOCK_METHOD4(fetch_image, VMImage(const FetchType&, const Query&, const PrepareAction&, const ProgressMonitor&));
-    MOCK_METHOD1(remove, void(const std::string&));
-    MOCK_METHOD1(has_record_for, bool(const std::string&));
-    MOCK_METHOD0(prune_expired_images, void());
-    MOCK_METHOD3(update_images, void(const FetchType&, const PrepareAction&, const ProgressMonitor&));
-    MOCK_METHOD1(minimum_image_size_for, MemorySize(const std::string&));
-    MOCK_CONST_METHOD1(image_host_for, VMImageHost*(const std::string&));
-    MOCK_CONST_METHOD1(all_info_for, std::vector<std::pair<std::string, VMImageInfo>>(const Query&));
+    MOCK_METHOD(VMImage,
+                fetch_image,
+                (const FetchType&,
+                 const Query&,
+                 const PrepareAction&,
+                 const ProgressMonitor&,
+                 const bool,
+                 const std::optional<std::string>&,
+                 const mp::Path&),
+                (override));
+    MOCK_METHOD(void, remove, (const std::string&), (override));
+    MOCK_METHOD(bool, has_record_for, (const std::string&), (override));
+    MOCK_METHOD(void, prune_expired_images, (), (override));
+    MOCK_METHOD(void, update_images, (const FetchType&, const PrepareAction&, const ProgressMonitor&), (override));
+    MOCK_METHOD(MemorySize, minimum_image_size_for, (const std::string&), (override));
+    MOCK_METHOD(void, clone, (const std::string&, const std::string&), (override));
+    MOCK_METHOD(VMImageHost*, image_host_for, (const std::string&), (const, override));
+    MOCK_METHOD((std::vector<std::pair<std::string, VMImageInfo>>), all_info_for, (const Query&), (const, override));
 
 private:
     TempFile dummy_image;

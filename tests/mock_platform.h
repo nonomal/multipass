@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2021-2022 Canonical, Ltd.
+ * Copyright (C) Canonical, Ltd.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -30,22 +30,33 @@ class MockPlatform : public platform::Platform
 public:
     MockPlatform(const PrivatePass& pass) : platform::Platform(pass)
     {
-        ON_CALL(*this, set_server_socket_restrictions).WillByDefault(testing::Return());
+        EXPECT_CALL(*this, set_server_socket_restrictions)
+            .Times(testing::AnyNumber())
+            .WillRepeatedly(testing::Return());
     };
 
-    MOCK_CONST_METHOD0(get_network_interfaces_info, std::map<std::string, NetworkInterfaceInfo>());
-    MOCK_CONST_METHOD0(get_workflows_url_override, QString());
-    MOCK_CONST_METHOD1(is_remote_supported, bool(const std::string&));
-    MOCK_CONST_METHOD1(is_backend_supported, bool(const QString&));
-    MOCK_CONST_METHOD2(is_alias_supported, bool(const std::string&, const std::string&));
-    MOCK_CONST_METHOD2(chmod, int(const char*, unsigned int));
-    MOCK_CONST_METHOD3(chown, int(const char*, unsigned int, unsigned int));
-    MOCK_CONST_METHOD2(link, bool(const char*, const char*));
-    MOCK_CONST_METHOD3(symlink, bool(const char*, const char*, bool));
-    MOCK_CONST_METHOD3(utime, int(const char*, int, int));
-    MOCK_CONST_METHOD2(create_alias_script, void(const std::string&, const AliasDefinition&));
-    MOCK_CONST_METHOD1(remove_alias_script, void(const std::string&));
-    MOCK_CONST_METHOD2(set_server_socket_restrictions, void(const std::string&, const bool));
+    MOCK_METHOD((std::map < std::string, NetworkInterfaceInfo) >, get_network_interfaces_info, (), (const, override));
+    MOCK_METHOD(QString, get_blueprints_url_override, (), (const, override));
+    MOCK_METHOD(bool, is_remote_supported, (const std::string&), (const, override));
+    MOCK_METHOD(bool, is_backend_supported, (const QString&), (const, override));
+    MOCK_METHOD(bool, is_alias_supported, (const std::string&, const std::string&), (const, override));
+    MOCK_METHOD(int, chmod, (const char*, unsigned int), (const, override));
+    MOCK_METHOD(int, chown, (const char*, unsigned int, unsigned int), (const, override));
+    MOCK_METHOD(bool, link, (const char*, const char*), (const, override));
+    MOCK_METHOD(bool, symlink, (const char*, const char*, bool), (const, override));
+    MOCK_METHOD(int, utime, (const char*, int, int), (const, override));
+    MOCK_METHOD(void, create_alias_script, (const std::string&, const AliasDefinition&), (const, override));
+    MOCK_METHOD(void, remove_alias_script, (const std::string&), (const, override));
+    MOCK_METHOD(void, set_server_socket_restrictions, (const std::string&, const bool), (const, override));
+    MOCK_METHOD(QString, multipass_storage_location, (), (const, override));
+    MOCK_METHOD(SettingSpec::Set, extra_daemon_settings, (), (const, override));
+    MOCK_METHOD(SettingSpec::Set, extra_client_settings, (), (const, override));
+    MOCK_METHOD(QString, daemon_config_home, (), (const, override));
+    MOCK_METHOD(QString, default_driver, (), (const, override));
+    MOCK_METHOD(QString, default_privileged_mounts, (), (const, override));
+    MOCK_METHOD(bool, is_image_url_supported, (), (const, override));
+    MOCK_METHOD(QString, get_username, (), (const, override));
+    MOCK_METHOD(std::string, bridge_nomenclature, (), (const, override));
 
     MP_MOCK_SINGLETON_BOILERPLATE(MockPlatform, Platform);
 };

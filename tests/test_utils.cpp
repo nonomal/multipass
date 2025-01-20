@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2017-2022 Canonical, Ltd.
+ * Copyright (C) Canonical, Ltd.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -22,6 +22,7 @@
 #include "mock_openssl_syscalls.h"
 #include "mock_ssh.h"
 #include "mock_ssh_process_exit_status.h"
+#include "mock_ssh_test_fixture.h"
 #include "mock_virtual_machine.h"
 #include "stub_ssh_key_provider.h"
 #include "temp_dir.h"
@@ -31,7 +32,7 @@
 #include <multipass/utils.h>
 #include <multipass/vm_image_vault.h>
 
-#include <QRegExp>
+#include <QRegularExpression>
 
 #include <gtest/gtest-death-test.h>
 
@@ -41,6 +42,7 @@
 namespace mp = multipass;
 namespace mpl = multipass::logging;
 namespace mpt = multipass::test;
+namespace mpu = mp::utils;
 
 using namespace testing;
 
@@ -302,7 +304,7 @@ TEST(Utils, make_file_with_content_fails_if_path_cannot_be_created)
 
     auto [mock_file_ops, guard] = mpt::MockFileOps::inject();
 
-    EXPECT_CALL(*mock_file_ops, exists(_)).WillOnce(Return(false));
+    EXPECT_CALL(*mock_file_ops, exists(A<const QFile&>())).WillOnce(Return(false));
     EXPECT_CALL(*mock_file_ops, mkpath(_, _)).WillOnce(Return(false));
 
     MP_EXPECT_THROW_THAT(MP_UTILS.make_file_with_content(file_name, file_contents), std::runtime_error,
@@ -315,7 +317,7 @@ TEST(Utils, make_file_with_content_fails_if_file_cannot_be_created)
 
     auto [mock_file_ops, guard] = mpt::MockFileOps::inject();
 
-    EXPECT_CALL(*mock_file_ops, exists(_)).WillOnce(Return(false));
+    EXPECT_CALL(*mock_file_ops, exists(A<const QFile&>())).WillOnce(Return(false));
     EXPECT_CALL(*mock_file_ops, mkpath(_, _)).WillOnce(Return(true));
     EXPECT_CALL(*mock_file_ops, open(_, _)).WillOnce(Return(false));
 
@@ -329,13 +331,30 @@ TEST(Utils, make_file_with_content_throws_on_write_error)
 
     auto [mock_file_ops, guard] = mpt::MockFileOps::inject();
 
-    EXPECT_CALL(*mock_file_ops, exists(_)).WillOnce(Return(false));
+    EXPECT_CALL(*mock_file_ops, exists(A<const QFile&>())).WillOnce(Return(false));
     EXPECT_CALL(*mock_file_ops, mkpath(_, _)).WillOnce(Return(true));
     EXPECT_CALL(*mock_file_ops, open(_, _)).WillOnce(Return(true));
-    EXPECT_CALL(*mock_file_ops, write(_, _, _)).WillOnce(Return(747));
+    EXPECT_CALL(*mock_file_ops, write(A<QFile&>(), _, _)).WillOnce(Return(747));
 
     MP_EXPECT_THROW_THAT(MP_UTILS.make_file_with_content(file_name, file_contents), std::runtime_error,
                          mpt::match_what(HasSubstr("failed to write to file")));
+}
+
+TEST(Utils, make_file_with_content_throws_on_failure_to_flush)
+{
+    std::string file_name{"some_dir/test-file"};
+
+    auto [mock_file_ops, guard] = mpt::MockFileOps::inject();
+
+    EXPECT_CALL(*mock_file_ops, exists(A<const QFile&>())).WillOnce(Return(false));
+    EXPECT_CALL(*mock_file_ops, mkpath(_, _)).WillOnce(Return(true));
+    EXPECT_CALL(*mock_file_ops, open(_, _)).WillOnce(Return(true));
+    EXPECT_CALL(*mock_file_ops, write(A<QFile&>(), _, _)).WillOnce(Return(file_contents.size()));
+    EXPECT_CALL(*mock_file_ops, flush(A<QFile&>())).WillOnce(Return(false));
+
+    MP_EXPECT_THROW_THAT(MP_UTILS.make_file_with_content(file_name, file_contents),
+                         std::runtime_error,
+                         mpt::match_what(HasSubstr("failed to flush file")));
 }
 
 TEST(Utils, expectedScryptHashReturned)
@@ -354,40 +373,72 @@ TEST(Utils, generateScryptHashErrorThrows)
                          mpt::match_what(StrEq("Cannot generate passphrase hash")));
 }
 
-TEST(Utils, to_cmd_output_has_no_quotes)
+TEST(Utils, to_cmd_returns_empty_string_on_empty_input)
+{
+    std::vector<std::string> args{};
+    auto output = mp::utils::to_cmd(args, mp::utils::QuoteType::quote_every_arg);
+    EXPECT_THAT(output, ::testing::StrEq(""));
+}
+
+TEST(Utils, to_cmd_output_are_not_escaped_with_no_quotes)
 {
     std::vector<std::string> args{"hello", "world"};
     auto output = mp::utils::to_cmd(args, mp::utils::QuoteType::no_quotes);
     EXPECT_THAT(output, ::testing::StrEq("hello world"));
 }
 
-TEST(Utils, to_cmd_arguments_are_single_quoted)
+TEST(Utils, to_cmd_arguments_are_not_escaped_if_not_needed)
 {
     std::vector<std::string> args{"hello", "world"};
     auto output = mp::utils::to_cmd(args, mp::utils::QuoteType::quote_every_arg);
-    EXPECT_THAT(output, ::testing::StrEq("'hello' 'world'"));
+    EXPECT_THAT(output, ::testing::StrEq("hello world"));
 }
 
-TEST(Utils, to_cmd_arguments_are_double_quoted_when_needed)
+TEST(Utils, to_cmd_arguments_with_single_quotes_are_escaped)
 {
     std::vector<std::string> args{"it's", "me"};
     auto output = mp::utils::to_cmd(args, mp::utils::QuoteType::quote_every_arg);
-    EXPECT_THAT(output, ::testing::StrEq("\"it's\" 'me'"));
+    EXPECT_THAT(output, ::testing::StrEq("it\\'s me"));
 }
 
-TEST(Utils, to_cmd_arguments_are_single_quoted_when_needed)
+TEST(Utils, to_cmd_arguments_with_double_quotes_are_escaped)
 {
     std::vector<std::string> args{"they", "said", "\"please\""};
     auto output = mp::utils::to_cmd(args, mp::utils::QuoteType::quote_every_arg);
-    EXPECT_THAT(output, ::testing::StrEq("'they' 'said' '\"please\"'"));
+    EXPECT_THAT(output, ::testing::StrEq("they said \\\"please\\\""));
 }
 
-TEST(Utils, trim_end_actually_trims_end)
+struct TestTrimUtilities : public Test
 {
-    std::string s{"I'm a great\n\t string \n \f \n \r \t   \v"};
+    std::string s{"\n \f \n \r \t   \vI'm a great\n\t string \n \f \n \r \t   \v"};
+};
+
+TEST_F(TestTrimUtilities, trimEndActuallyTrimsEnd)
+{
     mp::utils::trim_end(s);
 
-    EXPECT_THAT(s, ::testing::StrEq("I'm a great\n\t string"));
+    EXPECT_THAT(s, ::testing::StrEq("\n \f \n \r \t   \vI'm a great\n\t string"));
+}
+
+TEST_F(TestTrimUtilities, trimBeginActuallyTrimsTheBeginning)
+{
+    mp::utils::trim_begin(s);
+
+    EXPECT_EQ(s, "I'm a great\n\t string \n \f \n \r \t   \v");
+}
+
+TEST_F(TestTrimUtilities, trimActuallyTrims)
+{
+    mp::utils::trim(s);
+
+    EXPECT_EQ(s, "I'm a great\n\t string");
+}
+
+TEST_F(TestTrimUtilities, trimAcceptsCustomFilter)
+{
+    mp::utils::trim(s, [](unsigned char c) { return c == '\n' || c == '\v'; });
+
+    EXPECT_EQ(s, " \f \n \r \t   \vI'm a great\n\t string \n \f \n \r \t   ");
 }
 
 TEST(Utils, trim_newline_works)
@@ -404,18 +455,25 @@ TEST(Utils, trim_newline_assertion_works)
     ASSERT_DEBUG_DEATH(mp::utils::trim_newline(s), "[Aa]ssert");
 }
 
-TEST(Utils, escape_char_actually_escapes)
-{
-    std::string s{"I've got \"quotes\""};
-    auto res = mp::utils::escape_char(s, '"');
-    EXPECT_THAT(res, ::testing::StrEq("I've got \\\"quotes\\\""));
-}
-
 TEST(Utils, escape_for_shell_actually_escapes)
 {
     std::string s{"I've got \"quotes\""};
     auto res = mp::utils::escape_for_shell(s);
     EXPECT_THAT(res, ::testing::StrEq("I\\'ve\\ got\\ \\\"quotes\\\""));
+}
+
+TEST(Utils, escape_for_shell_quotes_newlines)
+{
+    std::string s{"I've got\nnewlines"};
+    auto res = mp::utils::escape_for_shell(s);
+    EXPECT_THAT(res, ::testing::StrEq("I\\'ve\\ got\"\n\"newlines"));
+}
+
+TEST(Utils, escape_for_shell_quotes_empty_string)
+{
+    std::string s{""};
+    auto res = mp::utils::escape_for_shell(s);
+    EXPECT_THAT(res, ::testing::StrEq("''"));
 }
 
 TEST(Utils, try_action_actually_times_out)
@@ -447,7 +505,7 @@ TEST(Utils, try_action_does_not_timeout)
 TEST(Utils, uuid_has_no_curly_brackets)
 {
     auto uuid = mp::utils::make_uuid();
-    EXPECT_FALSE(uuid.contains(QRegExp("[{}]")));
+    EXPECT_FALSE(uuid.contains(QRegularExpression("[{}]")));
 }
 
 TEST(Utils, contents_of_actually_reads_contents)
@@ -529,6 +587,11 @@ TEST(Utils, has_only_digits_works)
     EXPECT_FALSE(mp::utils::has_only_digits("0123456789:'`'"));
 }
 
+TEST(Utils, randomBytesReturnCorrectSize)
+{
+    EXPECT_THAT(MP_UTILS.random_bytes(4), SizeIs(4));
+}
+
 TEST(Utils, validate_server_address_throws_on_invalid_address)
 {
     EXPECT_THROW(mp::utils::validate_server_address("unix"), std::runtime_error);
@@ -586,21 +649,21 @@ TEST(Utils, vm_running_returns_true)
 {
     mp::VirtualMachine::State state = mp::VirtualMachine::State::running;
 
-    EXPECT_TRUE(mp::utils::is_running(state));
+    EXPECT_TRUE(MP_UTILS.is_running(state));
 }
 
 TEST(Utils, vm_delayed_shutdown_returns_true)
 {
     mp::VirtualMachine::State state = mp::VirtualMachine::State::delayed_shutdown;
 
-    EXPECT_TRUE(mp::utils::is_running(state));
+    EXPECT_TRUE(MP_UTILS.is_running(state));
 }
 
 TEST(Utils, vm_stopped_returns_false)
 {
     mp::VirtualMachine::State state = mp::VirtualMachine::State::stopped;
 
-    EXPECT_FALSE(mp::utils::is_running(state));
+    EXPECT_FALSE(MP_UTILS.is_running(state));
 }
 
 TEST(Utils, absent_config_file_and_dir_are_created)
@@ -652,7 +715,7 @@ TEST(Utils, make_dir_creates_correct_dir)
     mpt::TempDir temp_dir;
     QString new_dir{"foo"};
 
-    auto new_path = mp::utils::make_dir(QDir(temp_dir.path()), new_dir);
+    auto new_path = MP_UTILS.make_dir(QDir(temp_dir.path()), new_dir);
 
     EXPECT_TRUE(QFile::exists(new_path));
     EXPECT_EQ(new_path, temp_dir.path() + "/" + new_dir);
@@ -662,7 +725,7 @@ TEST(Utils, make_dir_with_no_new_dir)
 {
     mpt::TempDir temp_dir;
 
-    auto new_path = mp::utils::make_dir(QDir(temp_dir.path()), "");
+    auto new_path = MP_UTILS.make_dir(QDir(temp_dir.path()), "");
 
     EXPECT_TRUE(QFile::exists(new_path));
     EXPECT_EQ(new_path, temp_dir.path());
@@ -675,67 +738,6 @@ TEST(Utils, check_filesystem_bytes_available_returns_non_negative)
     auto bytes_available = MP_UTILS.filesystem_bytes_available(temp_dir.path());
 
     EXPECT_GE(bytes_available, 0);
-}
-
-TEST(Utils, wait_for_cloud_init_no_errors_and_done_does_not_throw)
-{
-    REPLACE(ssh_connect, [](auto...) { return SSH_OK; });
-    REPLACE(ssh_is_connected, [](auto...) { return true; });
-    REPLACE(ssh_channel_open_session, [](auto...) { return SSH_OK; });
-    REPLACE(ssh_userauth_publickey, [](auto...) { return SSH_OK; });
-    REPLACE(ssh_channel_request_exec, [](auto...) { return SSH_OK; });
-
-    mpt::ExitStatusMock exit_status_mock;
-    exit_status_mock.return_exit_code(SSH_OK);
-
-    mp::test::StubSSHKeyProvider key_provider;
-    NiceMock<mpt::MockVirtualMachine> vm{"my_instance"};
-
-    EXPECT_CALL(vm, ensure_vm_is_running()).WillRepeatedly(Return());
-
-    std::chrono::seconds timeout(1);
-    EXPECT_NO_THROW(MP_UTILS.wait_for_cloud_init(&vm, timeout, key_provider));
-}
-
-TEST(Utils, wait_for_cloud_init_error_times_out_throws)
-{
-    REPLACE(ssh_connect, [](auto...) { return SSH_OK; });
-    REPLACE(ssh_is_connected, [](auto...) { return true; });
-    REPLACE(ssh_channel_open_session, [](auto...) { return SSH_OK; });
-    REPLACE(ssh_userauth_publickey, [](auto...) { return SSH_OK; });
-    REPLACE(ssh_channel_request_exec, [](auto...) { return SSH_OK; });
-
-    mpt::ExitStatusMock exit_status_mock;
-    exit_status_mock.return_exit_code(SSH_ERROR);
-
-    mp::test::StubSSHKeyProvider key_provider;
-    NiceMock<mpt::MockVirtualMachine> vm{"my_instance"};
-
-    EXPECT_CALL(vm, ensure_vm_is_running()).WillRepeatedly(Return());
-
-    std::chrono::milliseconds timeout(1);
-    MP_EXPECT_THROW_THAT(MP_UTILS.wait_for_cloud_init(&vm, timeout, key_provider), std::runtime_error,
-                         mpt::match_what(StrEq("timed out waiting for initialization to complete")));
-}
-
-TEST(Utils, wait_for_cloud_init_cannot_connect_times_out)
-{
-    REPLACE(ssh_connect, [](auto...) { return SSH_OK; });
-    REPLACE(ssh_is_connected, [](auto...) { return false; });
-    REPLACE(ssh_userauth_publickey, [](auto...) { return SSH_OK; });
-
-    mpt::MockLogger::Scope logger_scope = mpt::MockLogger::inject();
-    logger_scope.mock_logger->screen_logs(mpl::Level::warning);
-    logger_scope.mock_logger->expect_log(mpl::Level::warning, "unable to create a channel for remote process:");
-
-    mp::test::StubSSHKeyProvider key_provider;
-    NiceMock<mpt::MockVirtualMachine> vm{"my_instance"};
-
-    EXPECT_CALL(vm, ensure_vm_is_running()).WillRepeatedly(Return());
-
-    std::chrono::milliseconds timeout(1);
-    MP_EXPECT_THROW_THAT(MP_UTILS.wait_for_cloud_init(&vm, timeout, key_provider), std::runtime_error,
-                         mpt::match_what(StrEq("timed out waiting for initialization to complete")));
 }
 
 TEST(VaultUtils, copy_creates_new_file_and_returned_path_exists)

@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2018-2022 Canonical, Ltd.
+ * Copyright (C) Canonical, Ltd.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -24,7 +24,6 @@
 #include <multipass/constants.h>
 #include <multipass/exceptions/cmd_exceptions.h>
 #include <multipass/exceptions/settings_exceptions.h>
-#include <multipass/settings.h>
 
 #include <QCommandLineOption>
 #include <QString>
@@ -75,6 +74,25 @@ mp::InstanceNames cmd::add_instance_names(const mp::ArgParser* parser, const std
         instance_names.add_instance_name(default_name);
 
     return instance_names;
+}
+
+std::vector<mp::InstanceSnapshotPair> cmd::add_instance_and_snapshot_names(const mp::ArgParser* parser)
+{
+    std::vector<mp::InstanceSnapshotPair> instance_snapshot_names;
+    instance_snapshot_names.reserve(parser->positionalArguments().count());
+
+    for (const auto& arg : parser->positionalArguments())
+    {
+        mp::InstanceSnapshotPair inst_snap_name;
+        auto index = arg.indexOf('.');
+        inst_snap_name.set_instance_name(arg.left(index).toStdString());
+        if (index >= 0)
+            inst_snap_name.set_snapshot_name(arg.right(arg.length() - index - 1).toStdString());
+
+        instance_snapshot_names.push_back(inst_snap_name);
+    }
+
+    return instance_snapshot_names;
 }
 
 mp::ParseCode cmd::handle_format_option(const mp::ArgParser* parser, mp::Formatter** chosen_formatter,
@@ -133,14 +151,19 @@ mp::ReturnCode cmd::run_cmd_and_retry(const QStringList& args, const mp::ArgPars
 
 auto cmd::return_code_from(const mp::SettingsException& e) -> mp::ReturnCode
 {
-    return dynamic_cast<const InvalidSettingsException*>(&e) ? ReturnCode::CommandLineError : ReturnCode::CommandFail;
+    if (dynamic_cast<const InvalidSettingException*>(&e) || dynamic_cast<const UnrecognizedSettingException*>(&e))
+        return ReturnCode::CommandLineError;
+
+    return ReturnCode::CommandFail;
 }
 
-QString multipass::cmd::describe_settings_keys()
+QString multipass::cmd::describe_common_settings_keys()
 {
-    const auto keys = MP_SETTINGS.keys();
-    return std::accumulate(cbegin(keys), cend(keys), QStringLiteral("Keys:"),
-                           [](const auto& a, const auto& b) { return a + "\n  " + b; });
+    return std::accumulate(cbegin(mp::key_examples), cend(mp::key_examples),
+                           QStringLiteral("Some common settings keys are:"),
+                           [](const auto& a, const auto& b) { return a + "\n  - " + b; }) +
+           "\n\nUse `" + mp::client_name +
+           " get --keys` to obtain the full list of available settings at any given time.";
 }
 
 void multipass::cmd::add_timeout(multipass::ArgParser* parser)

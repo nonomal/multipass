@@ -4,36 +4,67 @@ on:
   push:
     branches:
     - main
-    - staging
-    - trying
     - release/[0-9]+.[0-9]+
     tags:
     - v[0-9]+.[0-9]+.[0-9]+
   pull_request:
     types: [opened, synchronize, reopened, ready_for_review]
+  merge_group:
+    types: [checks_requested]
 
-env:
-  BORS_RUN: ${{ github.event_name == 'push' && contains('refs/heads/staging refs/heads/trying', github.ref) }}
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.number && format('pr{0}', github.event.number) || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'merge_group' }}
 
 jobs:
   Lint:
     runs-on: ubuntu-latest
 
-    if: ${{ github.event_name == 'pull_request' || contains('refs/heads/staging refs/heads/trying', github.ref) }}
+    if: ${{ contains('pull_request merge_group', github.event_name) }}
 
     steps:
     - name: Check out code
-      uses: actions/checkout@v2
+      uses: actions/checkout@v4
       with:
         fetch-depth: 2
 
-    - name: Run clang-format through the diff
+    - name: Lint the code
       uses: ./.github/actions/lint
 
+  GetMatrix:
+    runs-on: ubuntu-latest
+
+    outputs:
+      matrix: ${{ steps.set-matrix.outputs.matrix }}
+
+    steps:
+    - name: Determine job matrix
+      id: set-matrix
+      run: |
+        set -euo pipefail
+
+        MATRIX='{"build-type": "Debug"}
+                {"build-type": "Clang"}
+                {"build-type": "Release"}'
+
+        if ${{ github.event_name != 'merge_group' }}; then
+            MATRIX+='{"build-type": "Coverage" }'
+        fi
+
+        echo "${MATRIX}" | jq -cs '{"include": . }' | awk '{ print "matrix=" $0 }' >> $GITHUB_OUTPUT
+
   BuildAndTest:
-    needs: Lint
-    # Need to explicitly continue on Lint getting skipped.
-    if: ${{ !failure() && !cancelled() }}
+    needs: [Lint, GetMatrix]
+
+    # Allow skipped Lint
+    # Let Lint fail on pull requests
+    if: |
+      ${{
+        success()
+        || needs.Lint.result == 'skipped'
+        || ( needs.Lint.result == 'failure'
+             && github.event_name == 'pull_request' )
+      }}
 
     outputs:
       label: ${{ steps.build-params.outputs.label }}
@@ -41,24 +72,24 @@ jobs:
       snap-file: ${{ steps.build-snap.outputs.snap-file }}
 
     strategy:
-      matrix:
-        build-type: [Debug, Clang, Release, Coverage]
+      matrix: ${{ fromJSON(needs.GetMatrix.outputs.matrix) }}
+      fail-fast: ${{ github.event_name == 'merge_group' }}
 
     runs-on: ubuntu-latest
 
     env:
       SNAPCRAFT_BUILD_INFO: 1
 
-    timeout-minutes: 60
+    timeout-minutes: 120
     steps:
     - name: Install Snapcraft
-      uses: samuelmeuli/action-snapcraft@v1
+      uses: samuelmeuli/action-snapcraft@v3
 
     - name: Install LXD
-      uses: whywaita/setup-lxd@v1
+      uses: canonical/setup-lxd@54a5806e490d92e207b57183cf111ed54bbdeff4
 
     - name: Check out code
-      uses: actions/checkout@v2
+      uses: actions/checkout@v4
       with:
         # Need to fetch it all for submodules to work.
         fetch-depth: 0
@@ -77,24 +108,31 @@ jobs:
         [ ! -f ${PATCH_PREFIX}.patch ] || patch -p1 --no-backup-if-mismatch < ${PATCH_PREFIX}.patch
         [ ! -f ${PATCH_PREFIX}-${{ matrix.build-type }}.patch ] || patch -p1 --no-backup-if-mismatch < ${PATCH_PREFIX}-${{ matrix.build-type }}.patch
 
+    - name: Set up vcpkg
+      id: setup-vcpkg
+      uses: lukka/run-vcpkg@v11
+      with:
+        vcpkgDirectory: '${{ github.workspace }}/3rd-party/vcpkg'
+
     - name: Set up CCache
       id: setup-ccache
       run: |
         sudo apt-get install ccache
         ccache --max-size=2G
+        mkdir -p ${HOME}/.ccache
         /snap/bin/lxc profile device add default ccache disk source=${HOME}/.ccache/ path=/root/.ccache
 
         # Find common base between main and HEAD to use as cache key.
         git -c protocol.version=2 fetch --no-tags --prune --progress --no-recurse-submodules origin main
-        echo "::set-output name=key::$( git merge-base origin/main ${{ github.sha }} )"
+        echo "key=$( git merge-base origin/main ${{ github.sha }} )" >> $GITHUB_OUTPUT
 
     - name: CCache
-      uses: actions/cache@v2
+      uses: actions/cache@v4
       with:
         key: ccache-${{ runner.os }}-${{ matrix.build-type }}-${{ steps.setup-ccache.outputs.key }}
         restore-keys: |
           ccache-${{ runner.os }}-${{ matrix.build-type }}-
-        path: ~/.ccache/**
+        path: ~/.ccache
 
     - name: Set up coverage
       id: coverage-setup
@@ -103,12 +141,24 @@ jobs:
         MULTIPASS_PART=${HOME}/multipass_part
         mkdir --parents ${MULTIPASS_PART}
         /snap/bin/lxc profile device add default build disk source=${MULTIPASS_PART} path=/root/parts/multipass
-        echo "::set-output name=build::${MULTIPASS_PART}/build"
+        echo "build=${MULTIPASS_PART}/build" >> $GITHUB_OUTPUT
 
     - name: Build
       run: |
         # Inject the build label.
         sed -i "/cmake-parameters:/a \    - -DMULTIPASS_BUILD_LABEL=${{ steps.build-params.outputs.label }}" snap/snapcraft.yaml
+
+        # Inject vcpkg GH Actions cache env vars if they exist
+        if [ -n "$ACTIONS_CACHE_URL" ]; then
+          sed -i "/build-environment:/a \    - ACTIONS_CACHE_URL: ${ACTIONS_CACHE_URL}" snap/snapcraft.yaml
+        fi
+        if [ -n "ACTIONS_RUNTIME_TOKEN" ]; then
+          sed -i "/build-environment:/a \    - ACTIONS_RUNTIME_TOKEN: ${ACTIONS_RUNTIME_TOKEN}" snap/snapcraft.yaml
+        fi
+
+        if [ -n "VCPKG_BINARY_SOURCES" ]; then
+          sed -i "/build-environment:/a \    - VCPKG_BINARY_SOURCES: ${VCPKG_BINARY_SOURCES}" snap/snapcraft.yaml
+        fi
 
         # Build the `multipass` part.
         /snap/bin/snapcraft build --use-lxd multipass
@@ -120,33 +170,50 @@ jobs:
       if: ${{ matrix.build-type == 'Debug' }}
       timeout-minutes: 2
       run: |
-        /snap/bin/lxc start snapcraft-multipass
-        /snap/bin/lxc exec snapcraft-multipass -- \
+        instance_name=`/snap/bin/lxc --project snapcraft --format=csv --columns=n list | grep multipass`
+        /snap/bin/lxc --project snapcraft start $instance_name
+        /snap/bin/lxc --project snapcraft exec $instance_name -- \
            env CTEST_OUTPUT_ON_FAILURE=1 \
                LD_LIBRARY_PATH=/root/stage/usr/lib/x86_64-linux-gnu/:/root/stage/lib/:/root/parts/multipass/build/lib/ \
                /root/parts/multipass/build/bin/multipass_tests
 
     - name: Measure coverage
+      id: measure-coverage
       if: ${{ matrix.build-type == 'Coverage' }}
+      env:
+        CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
       timeout-minutes: 5
       run: |
-        /snap/bin/lxc start snapcraft-multipass
+        instance_name=`/snap/bin/lxc --project snapcraft --format=csv --columns=n list | grep multipass`
+        /snap/bin/lxc --project snapcraft start $instance_name
 
         # Wait for snapd to actually finish- in particular, that snaps are mounted
         timeout 10 sh -c \
-          'while [ "$( /snap/bin/lxc exec snapcraft-multipass -- \
+          'while [ "$( /snap/bin/lxc --project snapcraft exec '$instance_name' -- \
              systemctl show --property=ActiveState snapd )" != "ActiveState=active" ]; do sleep 1; done'
+
+        # Wait for LXD container network to be ready like Snapcraft does
+        timeout 40 sh -c \
+          'while /snap/bin/lxc --project snapcraft exec '$instance_name' -- getent hosts canonical.com ; \
+             [ $? -ne 0 ] ; do sleep 1; done'
 
         # The following 2 commands workaround the issue in 20.04 where the default parsing of the coverage
         # JSON file is extremely slow. This makes is use fast parsing.
-        /snap/bin/lxc exec snapcraft-multipass -- \
-           sh -c "sudo sed -i \"s/use JSON/use JSON::XS/\" \`which geninfo\`"
-        /snap/bin/lxc exec snapcraft-multipass -- apt-get -y install libjson-xs-perl
+        /snap/bin/lxc --project snapcraft exec $instance_name -- apt-get -y install libjson-xs-perl sudo
+        /snap/bin/lxc --project snapcraft exec $instance_name -- \
+           sh -c "sudo sed -i \"s/use JSON::PP/use JSON::XS/\" \`which geninfo\`"
 
-        /snap/bin/lxc exec snapcraft-multipass -- \
+        /snap/bin/lxc --project snapcraft exec $instance_name -- \
           env CTEST_OUTPUT_ON_FAILURE=1 \
             cmake --build /root/parts/multipass/build --target covreport
         bash <(curl -s https://codecov.io/bash) -Z -s ${{ steps.coverage-setup.outputs.build }}
+
+    - name: Continue on Error comment
+      uses: mainmatter/continue-on-error-comment@v1
+      with:
+        repo-token: ${{ secrets.GITHUB_TOKEN }}
+        outcome: ${{ steps.measure-coverage.outcome }}
+        test-id: Error with measuring coverage in ${{ matrix.build-type }} build
 
     - name: Build and verify the snap
       id: build-snap
@@ -160,15 +227,16 @@ jobs:
         sudo snap install review-tools
         /snap/bin/review-tools.snap-review --plugs=snap/local/plugs.json *.snap
 
-        echo "::set-output name=snap-file::$( ls *.snap )"
+        echo "snap-file=$( ls *.snap )" >> $GITHUB_OUTPUT
 
     - name: Upload the snap
-      uses: actions/upload-artifact@v2
+      uses: actions/upload-artifact@v4
       if: ${{ matrix.build-type == 'Release' }}
       with:
         name: ${{ steps.build-snap.outputs.snap-file }}
         path: ${{ steps.build-snap.outputs.snap-file }}
         if-no-files-found: error
+        retention-days: 30
 
   # Publish the snap to the store if a channel was determined and we have access to secrets.
   Publish-Snap:
@@ -179,6 +247,7 @@ jobs:
       && !cancelled()
       && needs.BuildAndTest.outputs.channel != ''
       && (github.event_name == 'push'
+          || github.event_name == 'merge_group'
           || github.event.pull_request.head.repo.full_name == github.repository)
       }}
 
@@ -187,31 +256,18 @@ jobs:
     timeout-minutes: 15
     steps:
     - name: Download the built snap
-      uses: actions/download-artifact@v2
+      uses: actions/download-artifact@v4
       with:
         name: ${{ needs.BuildAndTest.outputs.snap-file }}
 
     - name: Install Snapcraft and log in
-      uses: samuelmeuli/action-snapcraft@v1
-      with:
-        snapcraft_token: ${{ secrets.SNAPCRAFT_TOKEN }}
+      uses: samuelmeuli/action-snapcraft@v3
 
     - name: Publish the snap
+      env:
+        SNAPCRAFT_STORE_CREDENTIALS: ${{ secrets.SNAPCRAFT_TOKEN }}
       run: |
         snapcraft upload *.snap --release ${{ needs.BuildAndTest.outputs.channel }}
-
-  # Report result to Bors on `staging` and `trying` branches.
-  Linux:
-    if: ${{ always() && github.event_name == 'push' && contains('refs/heads/staging refs/heads/trying', github.ref) }}
-    needs:
-    - BuildAndTest
-
-    runs-on: ubuntu-latest
-
-    steps:
-    - name: Report failure
-      if: ${{ needs.BuildAndTest.result != 'success' }}
-      run: exit 1
 
   # Dispatch to the private side
   Dispatch:
@@ -225,6 +281,7 @@ jobs:
       !failure()
       && !cancelled()
       && (github.event_name == 'push'
+          || github.event_name == 'merge_group'
           || github.event.pull_request.head.repo.full_name == github.repository)
       }}
 
@@ -235,15 +292,15 @@ jobs:
       id: dispatch-params
       run: |
         if [ "${{ github.event_name }}" == "pull_request" ]; then
-            echo "::set-output name=head_ref::${{ github.head_ref }}"
-            echo "::set-output name=head_sha::${{ github.event.pull_request.head.sha }}"
+            echo "head_ref=${{ github.head_ref }}" >> $GITHUB_OUTPUT
+            echo "head_sha=${{ github.event.pull_request.head.sha }}" >> $GITHUB_OUTPUT
         else
-            echo "::set-output name=head_ref::${{ github.ref }}"
-            echo "::set-output name=head_sha::${{ github.sha }}"
+            echo "head_ref=${{ github.ref }}" >> $GITHUB_OUTPUT
+            echo "head_sha=${{ github.sha }}" >> $GITHUB_OUTPUT
         fi
 
     - name: Dispatch Linux integration tests
-      if: ${{ env.BORS_RUN == 'true' }}
+      if: ${{ github.event_name == 'push' }}
       uses: Saviq/workflow-dispatch@dist
       with:
         token: ${{ secrets.PRIVATE_GITHUB_TOKEN }}
@@ -258,7 +315,7 @@ jobs:
       continue-on-error: true
 
     - name: Dispatch macOS and Windows builds
-      uses: peter-evans/repository-dispatch@v1
+      uses: peter-evans/repository-dispatch@v3
       with:
         token: ${{ secrets.PRIVATE_GITHUB_TOKEN }}
         repository: ${{ secrets.PRIVATE_GITHUB_REPO }}
@@ -266,12 +323,11 @@ jobs:
         client-payload: |
           {
             "repository": "${{ github.repository }}",
-            "repositoryUrl": "${{ github.repositoryUrl }}",
             "head_ref": "${{ steps.dispatch-params.outputs.head_ref }}",
             "head_sha": "${{ steps.dispatch-params.outputs.head_sha }}",
             "ref": "${{ github.ref }}",
             "sha": "${{ github.sha }}",
             "draft": "${{ github.event.pull_request.draft }}",
             "label": "${{ needs.BuildAndTest.outputs.label }}",
-            "dispatch_ci": "${{ env.BORS_RUN == 'true' }}"
+            "dispatch_ci": "${{ github.event_name == 'push' }}"
           }

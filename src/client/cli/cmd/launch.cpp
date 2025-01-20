@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2017-2022 Canonical, Ltd.
+ * Copyright (C) Canonical, Ltd.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -18,51 +18,41 @@
 #include "launch.h"
 #include "animated_spinner.h"
 #include "common_cli.h"
+#include "create_alias.h"
 
 #include <multipass/cli/argparser.h>
 #include <multipass/cli/client_platform.h>
+#include <multipass/cli/prompters.h>
 #include <multipass/constants.h>
 #include <multipass/exceptions/cmd_exceptions.h>
 #include <multipass/exceptions/snap_environment_exception.h>
+#include <multipass/file_ops.h>
 #include <multipass/format.h>
 #include <multipass/memory_size.h>
-#include <multipass/settings.h>
+#include <multipass/settings/settings.h>
 #include <multipass/snap_utils.h>
+#include <multipass/standard_paths.h>
+#include <multipass/url_downloader.h>
 #include <multipass/utils.h>
 
 #include <yaml-cpp/yaml.h>
 
 #include <QDir>
 #include <QFileInfo>
+#include <QRegularExpression>
 #include <QTimeZone>
-
-#include <cstdlib>
-#include <regex>
+#include <QUrl>
+#include <filesystem>
 #include <unordered_map>
 
 namespace mp = multipass;
 namespace mpu = multipass::utils;
 namespace cmd = multipass::cmd;
 namespace mcp = multipass::cli::platform;
-using RpcMethod = mp::Rpc::Stub;
+namespace fs = std::filesystem;
 
 namespace
 {
-const std::regex yes{"y|yes", std::regex::icase | std::regex::optimize};
-const std::regex no{"n|no", std::regex::icase | std::regex::optimize};
-const std::regex later{"l|later", std::regex::icase | std::regex::optimize};
-const std::regex show{"s|show", std::regex::icase | std::regex::optimize};
-
-constexpr bool on_windows()
-{ // TODO when we have remote client-daemon communication, we need to get the daemon's platform
-    return
-#ifdef MULTIPASS_PLATFORM_WINDOWS
-        true;
-#else
-        false;
-#endif
-}
-
 auto checked_mode(const std::string& mode)
 {
     if (mode == "auto")
@@ -84,10 +74,10 @@ const std::string& checked_mac(const std::string& mac)
 auto net_digest(const QString& options)
 {
     multipass::LaunchRequest_NetworkOptions net;
-    QStringList split = options.split(',', QString::SkipEmptyParts);
+    QStringList split = options.split(',', Qt::SkipEmptyParts);
     for (const auto& key_value_pair : split)
     {
-        QStringList key_value_split = key_value_pair.split('=', QString::SkipEmptyParts);
+        QStringList key_value_split = key_value_pair.split('=', Qt::SkipEmptyParts);
         if (key_value_split.size() == 2)
         {
 
@@ -127,16 +117,43 @@ mp::ReturnCode cmd::Launch::run(mp::ArgParser* parser)
     }
 
     auto ret = request_launch(parser);
-    if (ret == ReturnCode::Ok && request.instance_name() == petenv_name.toStdString())
+
+    if (ret != ReturnCode::Ok)
+        return ret;
+
+    auto got_petenv = instance_name == petenv_name;
+    if (!got_petenv && mount_routes.empty())
+        return ret;
+
+    if (MP_SETTINGS.get_as<bool>(mounts_key))
     {
-        std::string mounts_value;
-        if (std::tie(ret, mounts_value) = request_mounts_setting_from_daemon(parser); ret == ReturnCode::Ok)
+        auto has_home_mount = std::count_if(mount_routes.begin(), mount_routes.end(),
+                                            [](const auto& route) { return route.second == home_automount_dir; });
+
+        if (got_petenv && !has_home_mount)
         {
-            if (mounts_value != "true")
-                cout << fmt::format("Skipping '{}' mount due to disabled mounts feature\n", mp::home_automount_dir);
-            else
-                ret = mount_home(parser);
+            try
+            {
+                mount_routes.emplace_back(QString::fromLocal8Bit(mpu::snap_real_home_dir()), home_automount_dir);
+            }
+            catch (const SnapEnvironmentException&)
+            {
+                mount_routes.emplace_back(QDir::toNativeSeparators(QDir::homePath()), home_automount_dir);
+            }
         }
+
+        for (const auto& [source, target] : mount_routes)
+        {
+            auto mount_ret = mount(parser, source, target);
+            if (ret == ReturnCode::Ok)
+            {
+                ret = mount_ret;
+            }
+        }
+    }
+    else
+    {
+        cout << "Skipping mount due to disabled mounts feature\n";
     }
 
     return ret;
@@ -177,26 +194,34 @@ mp::ParseCode cmd::Launch::parse_args(mp::ArgParser* parser)
     QCommandLineOption diskOption(
         {"d", "disk"},
         QString::fromStdString(fmt::format("Disk space to allocate. Positive integers, in "
-                                           "bytes, or with K, M, G suffix.\nMinimum: {}, default: {}.",
+                                           "bytes, or decimals, with K, M, G suffix.\nMinimum: {}, default: {}.",
                                            min_disk_size, default_disk_size)),
         "disk", QString::fromUtf8(default_disk_size));
-    QCommandLineOption memOption(
-        {"m", "mem"},
-        QString::fromStdString(fmt::format("Amount of memory to allocate. Positive integers, "
-                                           "in bytes, or with K, M, G suffix.\nMinimum: {}, default: {}.",
-                                           min_memory_size, default_memory_size)),
-        "mem", QString::fromUtf8(default_memory_size)); // In MB's
 
+    QCommandLineOption memOption(
+        {"m", "memory"},
+        QString::fromStdString(fmt::format("Amount of memory to allocate. Positive integers, "
+                                           "in bytes, or decimals, with K, M, G suffix.\nMinimum: {}, default: {}.",
+                                           min_memory_size, default_memory_size)),
+        "memory", QString::fromUtf8(default_memory_size)); // In MB's
+    QCommandLineOption memOptionDeprecated(
+        "mem", QString::fromStdString("Deprecated memory allocation long option. See \"--memory\"."), "memory",
+        QString::fromUtf8(default_memory_size));
+    memOptionDeprecated.setFlags(QCommandLineOption::HiddenFromHelp);
+
+    const auto valid_name_desc = QString{"Valid names must consist of letters, numbers, or hyphens, must start with a "
+                                         "letter, and must end with an alphanumeric character."};
     const auto name_option_desc =
         petenv_name.isEmpty()
-            ? QString{"Name for the instance."}
+            ? QString{"Name for the instance.\n%1"}.arg(valid_name_desc)
             : QString{"Name for the instance. If it is '%1' (the configured primary instance name), the user's home "
-                      "directory is mounted inside the newly launched instance, in '%2'."}
-                  .arg(petenv_name, mp::home_automount_dir);
+                      "directory is mounted inside the newly launched instance, in '%2'.\n%3"}
+                  .arg(petenv_name, mp::home_automount_dir, valid_name_desc);
 
     QCommandLineOption nameOption({"n", "name"}, name_option_desc, "name");
-    QCommandLineOption cloudInitOption("cloud-init", "Path to a user-data cloud-init configuration, or '-' for stdin",
-                                       "file");
+    QCommandLineOption cloudInitOption("cloud-init",
+                                       "Path or URL to a user-data cloud-init configuration, or '-' for stdin.",
+                                       "file> | <url");
     QCommandLineOption networkOption("network",
                                      "Add a network interface to the instance, where <spec> is in the "
                                      "\"key=value,key=value\" format, with the following keys available:\n"
@@ -208,8 +233,14 @@ mp::ParseCode cmd::Launch::parse_args(mp::ArgParser* parser)
                                      "You can also use a shortcut of \"<name>\" to mean \"name=<name>\".",
                                      "spec");
     QCommandLineOption bridgedOption("bridged", "Adds one `--network bridged` network.");
+    QCommandLineOption mountOption("mount",
+                                   "Mount a local directory inside the instance. If <target> is omitted, the "
+                                   "mount point will be under /home/ubuntu/<source-dir>, where <source-dir> is "
+                                   "the name of the <source> directory.",
+                                   "source>:<target");
 
-    parser->addOptions({cpusOption, diskOption, memOption, nameOption, cloudInitOption, networkOption, bridgedOption});
+    parser->addOptions({cpusOption, diskOption, memOption, memOptionDeprecated, nameOption, cloudInitOption,
+                        networkOption, bridgedOption, mountOption});
 
     mp::cmd::add_timeout(parser);
 
@@ -230,8 +261,15 @@ mp::ParseCode cmd::Launch::parse_args(mp::ArgParser* parser)
     {
         auto remote_image_name = parser->positionalArguments().first();
 
-        if (remote_image_name.startsWith("http://") || remote_image_name.startsWith("https://") ||
-            remote_image_name.startsWith("file://"))
+        if (remote_image_name.startsWith("file://"))
+        {
+            // Convert to absolute because the daemon doesn't know where the client is being executed.
+            auto file_info = QFileInfo(remote_image_name.remove(0, 7));
+            auto absolute_file_path = file_info.absoluteFilePath();
+
+            request.set_image("file://" + absolute_file_path.toStdString());
+        }
+        else if (remote_image_name.startsWith("http://") || remote_image_name.startsWith("https://"))
         {
             request.set_image(remote_image_name.toStdString());
         }
@@ -269,16 +307,28 @@ mp::ParseCode cmd::Launch::parse_args(mp::ArgParser* parser)
 
         if (!conversion_pass || cpu_count < 1)
         {
-            fmt::print(cerr, "error: Invalid CPU count '{}', need a positive integer value.\n", cpu_text);
+            fmt::print(cerr, "Error: invalid CPU count '{}', need a positive integer value.\n", cpu_text);
             return ParseCode::CommandLineError;
         }
 
         request.set_num_cores(cpu_count);
     }
 
-    if (parser->isSet(memOption))
+    if (parser->isSet(memOption) || parser->isSet(memOptionDeprecated))
     {
-        auto arg_mem_size = parser->value(memOption).toStdString();
+        if (parser->isSet(memOption) && parser->isSet(memOptionDeprecated))
+        {
+            cerr << "Error: invalid option(s) used for memory allocation. Please use \"--memory\" to specify amount of "
+                    "memory to allocate.\n";
+            return ParseCode::CommandLineError;
+        }
+
+        if (parser->isSet(memOptionDeprecated))
+            cerr << "Warning: the \"--mem\" long option is deprecated in favour of \"--memory\". Please update any "
+                    "scripts, etc.\n";
+
+        auto arg_mem_size = parser->isSet(memOption) ? parser->value(memOption).toStdString()
+                                                     : parser->value(memOptionDeprecated).toStdString();
 
         mp::MemorySize{arg_mem_size}; // throw if bad
 
@@ -294,33 +344,76 @@ mp::ParseCode cmd::Launch::parse_args(mp::ArgParser* parser)
         request.set_disk_space(arg_disk_size);
     }
 
+    if (parser->isSet(mountOption))
+    {
+        for (const auto& value : parser->values(mountOption))
+        {
+            // this is needed so that Windows absolute paths are not split at the colon following the drive letter
+            const auto colon_split = QRegularExpression{R"(^[A-Za-z]:[\\/].*)"}.match(value).hasMatch();
+            const auto mount_source = value.section(':', 0, colon_split);
+            const auto mount_target = value.section(':', colon_split + 1);
+
+            // Validate source directory of client side mounts
+            QFileInfo source_dir(mount_source);
+            if (!MP_FILEOPS.exists(source_dir))
+            {
+                cerr << "Mount source path \"" << mount_source.toStdString() << "\" does not exist\n";
+                return ParseCode::CommandLineError;
+            }
+
+            if (!MP_FILEOPS.isDir(source_dir))
+            {
+                cerr << "Mount source path \"" << mount_source.toStdString() << "\" is not a directory\n";
+                return ParseCode::CommandLineError;
+            }
+
+            if (!MP_FILEOPS.isReadable(source_dir))
+            {
+                cerr << "Mount source path \"" << mount_source.toStdString() << "\" is not readable\n";
+                return ParseCode::CommandLineError;
+            }
+
+            mount_routes.emplace_back(mount_source, mount_target);
+        }
+    }
+
     if (parser->isSet(cloudInitOption))
     {
+        constexpr auto err_msg_template = "Could not load cloud-init configuration: {}";
         try
         {
+            const QString& cloud_init_file = parser->value(cloudInitOption);
             YAML::Node node;
-            const QString& cloudInitFile = parser->value(cloudInitOption);
-            if (cloudInitFile == "-")
+            if (cloud_init_file == "-")
             {
                 node = YAML::Load(term->read_all_cin());
             }
+            else if (cloud_init_file.startsWith("http://") || cloud_init_file.startsWith("https://"))
+            {
+                URLDownloader downloader{std::chrono::minutes{1}};
+                auto downloaded_yaml = downloader.download(QUrl(cloud_init_file));
+                node = YAML::Load(downloaded_yaml.toStdString());
+            }
             else
             {
-                QFileInfo check_file(cloudInitFile);
+                auto cloud_init_file_stdstr = cloud_init_file.toStdString();
+                auto file_type = fs::status(cloud_init_file_stdstr).type();
+                if (file_type != fs::file_type::regular && file_type != fs::file_type::fifo)
+                    throw YAML::BadFile{cloud_init_file_stdstr};
 
-                if (!check_file.exists() || !check_file.isFile())
-                {
-                    cerr << "error: No such file: " << cloudInitFile.toStdString() << "\n";
-                    return ParseCode::CommandLineError;
-                }
-
-                node = YAML::LoadFile(cloudInitFile.toStdString());
+                node = YAML::LoadFile(cloud_init_file_stdstr);
             }
             request.set_cloud_init_user_data(YAML::Dump(node));
         }
-        catch (const std::exception& e)
+        catch (const YAML::BadFile& e)
         {
-            cerr << "error loading cloud-init config: " << e.what() << "\n";
+            auto err_detail = fmt::format("{}\n{}", e.what(), "Please ensure that Multipass can read it.");
+            fmt::println(cerr, err_msg_template, err_detail);
+            return ParseCode::CommandLineError;
+        }
+        catch (const YAML::Exception& e)
+        {
+            fmt::println(cerr, err_msg_template, e.what());
             return ParseCode::CommandLineError;
         }
     }
@@ -370,10 +463,48 @@ mp::ReturnCode cmd::Launch::request_launch(const ArgParser* parser)
         if (timer)
             timer->pause();
 
-        if (reply.metrics_pending())
+        instance_name = QString::fromStdString(request.instance_name().empty() ? reply.vm_instance_name()
+                                                                               : request.instance_name());
+
+        std::vector<std::string> warning_aliases;
+        for (const auto& alias_to_be_created : reply.aliases_to_be_created())
         {
-            request.mutable_opt_in_reply()->set_opt_in_status(ask_metrics_permission(reply));
-            return request_launch(parser);
+            AliasDefinition alias_definition{alias_to_be_created.instance(), alias_to_be_created.command(),
+                                             alias_to_be_created.working_directory()};
+            if (create_alias(aliases, alias_to_be_created.name(), alias_definition, cout, cerr,
+                             instance_name.toStdString()) != ReturnCode::Ok)
+                warning_aliases.push_back(alias_to_be_created.name());
+        }
+
+        if (warning_aliases.size())
+            cerr << fmt::format("Warning: unable to create {} {}.\n",
+                                warning_aliases.size() == 1 ? "alias" : "aliases",
+                                fmt::join(warning_aliases, ", "));
+
+        for (const auto& workspace_to_be_created : reply.workspaces_to_be_created())
+        {
+            auto home_dir = mpu::in_multipass_snap() ? QString::fromLocal8Bit(mpu::snap_real_home_dir())
+                                                     : MP_STDPATHS.writableLocation(StandardPaths::HomeLocation);
+            auto full_path_str = home_dir + "/multipass/" + QString::fromStdString(workspace_to_be_created);
+
+            QDir full_path(full_path_str);
+            if (full_path.exists())
+            {
+                cerr << fmt::format("Folder \"{}\" already exists.\n", full_path_str);
+            }
+            else
+            {
+                if (!MP_FILEOPS.mkpath(full_path, full_path_str))
+                {
+                    cerr << fmt::format("Error creating folder {}. Not mounting.\n", full_path_str);
+                    continue;
+                }
+            }
+
+            if (mount(parser, full_path_str, QString::fromStdString(workspace_to_be_created)) != ReturnCode::Ok)
+            {
+                cerr << fmt::format("Error mounting folder {}.\n", full_path_str);
+            }
         }
 
         cout << "Launched: " << reply.vm_instance_name() << "\n";
@@ -428,11 +559,10 @@ mp::ReturnCode cmd::Launch::request_launch(const ArgParser* parser)
         return standard_failure_handler_for(name(), cerr, status, error_details);
     };
 
-    auto streaming_callback = [this](mp::LaunchReply& reply) {
+    auto streaming_callback = [this](mp::LaunchReply& reply,
+                                     grpc::ClientReaderWriterInterface<LaunchRequest, LaunchReply>* client) {
         std::unordered_map<int, std::string> progress_messages{
             {LaunchProgress_ProgressTypes_IMAGE, "Retrieving image: "},
-            {LaunchProgress_ProgressTypes_KERNEL, "Retrieving kernel image: "},
-            {LaunchProgress_ProgressTypes_INITRD, "Retrieving initrd image: "},
             {LaunchProgress_ProgressTypes_EXTRACT, "Extracting image: "},
             {LaunchProgress_ProgressTypes_VERIFY, "Verifying image: "},
             {LaunchProgress_ProgressTypes_WAITING, "Preparing image: "}};
@@ -472,123 +602,23 @@ mp::ReturnCode cmd::Launch::request_launch(const ArgParser* parser)
     return dispatch(&RpcMethod::launch, request, on_success, on_failure, streaming_callback);
 }
 
-auto cmd::Launch::mount_home(const mp::ArgParser* parser) -> ReturnCode
+auto cmd::Launch::mount(const mp::ArgParser* parser, const QString& mount_source, const QString& mount_target)
+    -> ReturnCode
 {
-    QString mount_source{};
-    try
-    {
-        mount_source = QString::fromLocal8Bit(mpu::snap_real_home_dir());
-    }
-    catch (const SnapEnvironmentException&)
-    {
-        mount_source = QDir::toNativeSeparators(QDir::homePath());
-    }
-
-    const auto mount_target = QString{"%1:%2"}.arg(petenv_name, home_automount_dir);
-
-    auto ret = run_cmd({"multipass", "mount", mount_source, mount_target}, parser, cout, cerr);
+    const auto full_mount_target = QString{"%1:%2"}.arg(instance_name, mount_target);
+    auto ret = run_cmd({"multipass", "mount", mount_source, full_mount_target}, parser, cout, cerr);
     if (ret == Ok)
-        cout << fmt::format("Mounted '{}' into '{}'\n", mount_source, mount_target);
+        cout << fmt::format("Mounted '{}' into '{}'\n", mount_source, full_mount_target);
 
     return ret;
 }
 
-auto cmd::Launch::request_mounts_setting_from_daemon(const ArgParser* parser) -> std::pair<ReturnCode, std::string>
-{
-    // TODO: This needs wrapping in mp::Settings
-    std::string mounts_value = "false";
-    mp::GetRequest get_request;
-
-    auto on_success = [&mounts_value](mp::GetReply& reply) {
-        mounts_value = reply.value();
-        return ReturnCode::Ok;
-    };
-
-    auto on_failure = [this](grpc::Status& status) { return standard_failure_handler_for(name(), cerr, status); };
-
-    get_request.set_key(mp::mounts_key);
-    get_request.set_verbosity_level(parser->verbosityLevel());
-    auto ret = dispatch(&RpcMethod::get, get_request, on_success, on_failure);
-
-    return {ret, mounts_value};
-}
-
-auto cmd::Launch::ask_metrics_permission(const mp::LaunchReply& reply) -> OptInStatus::Status
-{
-    if (term->is_live())
-    {
-        cout << "One quick question before we launch … Would you like to help\n"
-             << "the Multipass developers, by sending anonymous usage data?\n"
-             << "This includes your operating system, which images you use,\n"
-             << "the number of instances, their properties and how long you use them.\n"
-             << "We’d also like to measure Multipass’s speed.\n\n"
-             << (reply.metrics_show_info().has_host_info() ? "Choose “show” to see an example usage report.\n\n"
-                                                             "Send usage data (yes/no/Later/show)? "
-                                                           : "Send usage data (yes/no/Later)? ");
-
-        while (true)
-        {
-            std::string answer;
-            std::getline(term->cin(), answer);
-            if (std::regex_match(answer, yes))
-            {
-                cout << "Thank you!\n";
-                return OptInStatus::ACCEPTED;
-            }
-            else if (std::regex_match(answer, no))
-            {
-                return OptInStatus::DENIED;
-            }
-            else if (answer.empty() || std::regex_match(answer, later))
-            {
-                return OptInStatus::LATER;
-            }
-            else if (reply.metrics_show_info().has_host_info() && std::regex_match(answer, show))
-            {
-                // TODO: Display actual metrics data here provided by daemon
-                cout << "Show metrics example here\n\n"
-                     << "Send usage data (yes/no/Later/show)? ";
-            }
-            else
-            {
-                cout << (reply.metrics_show_info().has_host_info() ? "Please answer yes/no/Later/show: "
-                                                                   : "Please answer yes/no/Later: ");
-            }
-        }
-    }
-
-    return OptInStatus::UNKNOWN;
-}
-
 bool cmd::Launch::ask_bridge_permission(multipass::LaunchReply& reply)
 {
-    static constexpr auto plural = "Multipass needs to create {} to connect to {}.\nThis will temporarily disrupt "
-                                   "connectivity on those interfaces.\n\nDo you want to continue (yes/no)? ";
-    static constexpr auto singular = "Multipass needs to create a {} to connect to {}.\nThis will temporarily disrupt "
-                                     "connectivity on that interface.\n\nDo you want to continue (yes/no)? ";
-    static constexpr auto nodes = on_windows() ? "switches" : "bridges";
-    static constexpr auto node = on_windows() ? "switch" : "bridge";
+    std::vector<std::string> nets;
 
-    if (term->is_live())
-    {
-        assert(reply.nets_need_bridging_size()); // precondition
-        if (reply.nets_need_bridging_size() != 1)
-            fmt::print(cout, plural, nodes, fmt::join(reply.nets_need_bridging(), ", "));
-        else
-            fmt::print(cout, singular, node, reply.nets_need_bridging(0));
+    std::copy(reply.nets_need_bridging().cbegin(), reply.nets_need_bridging().cend(), std::back_inserter(nets));
 
-        while (true)
-        {
-            std::string answer;
-            std::getline(term->cin(), answer);
-            if (std::regex_match(answer, yes))
-                return true;
-            else if (std::regex_match(answer, no))
-                return false;
-            else
-                cout << "Please answer yes/no: ";
-        }
-    }
-
-    return false;
+    mp::BridgePrompter prompter(term);
+    return prompter.bridge_prompt(nets);
 }

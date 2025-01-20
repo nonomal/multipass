@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2017-2022 Canonical, Ltd.
+ * Copyright (C) Canonical, Ltd.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -26,10 +26,9 @@ namespace test
 {
 struct StubVMImageHost final : public multipass::VMImageHost
 {
-    multipass::optional<multipass::VMImageInfo> info_for(const multipass::Query& query) override
+    std::optional<multipass::VMImageInfo> info_for(const multipass::Query& query) override
     {
-        return multipass::optional<multipass::VMImageInfo>{
-            VMImageInfo{{}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, -1, {}}};
+        return std::optional<multipass::VMImageInfo>{VMImageInfo{{}, {}, {}, {}, {}, {}, {}, {}, {}, {}, -1, {}}};
     };
 
     std::vector<std::pair<std::string, multipass::VMImageInfo>> all_info_for(const multipass::Query& query) override
@@ -39,7 +38,7 @@ struct StubVMImageHost final : public multipass::VMImageHost
 
     multipass::VMImageInfo info_for_full_hash(const std::string& full_hash) override
     {
-        return {{}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, -1, {}};
+        return {{}, {}, {}, {}, {}, {}, {}, {}, {}, {}, -1, {}};
     };
 
     std::vector<multipass::VMImageInfo> all_images_for(const std::string& remote_name,
@@ -56,7 +55,11 @@ struct StubVMImageHost final : public multipass::VMImageHost
     {
         return {};
     }
+
+    void update_manifests(const bool is_force_update_from_network) override
+    {
+    }
 };
-}
-}
+} // namespace test
+} // namespace multipass
 #endif // MULTIPASS_STUB_IMAGE_HOST_H

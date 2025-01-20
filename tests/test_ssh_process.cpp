@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2018-2022 Canonical, Ltd.
+ * Copyright (C) Canonical, Ltd.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -16,7 +16,8 @@
  */
 
 #include "common.h"
-#include "mock_ssh.h"
+#include "mock_ssh_test_fixture.h"
+#include "stub_ssh_key_provider.h"
 
 #include <multipass/ssh/ssh_session.h>
 
@@ -24,26 +25,17 @@
 #include <thread>
 
 namespace mp = multipass;
+namespace mpt = multipass::test;
+
 using namespace testing;
 
 namespace
 {
 struct SSHProcess : public Test
 {
-    SSHProcess()
-    {
-        connect.returnValue(SSH_OK);
-        is_connected.returnValue(true);
-        open_session.returnValue(SSH_OK);
-        request_exec.returnValue(SSH_OK);
-        channel_is_closed.returnValue(0);
-    }
-    decltype(MOCK(ssh_connect)) connect{MOCK(ssh_connect)};
-    decltype(MOCK(ssh_is_connected)) is_connected{MOCK(ssh_is_connected)};
-    decltype(MOCK(ssh_channel_open_session)) open_session{MOCK(ssh_channel_open_session)};
-    decltype(MOCK(ssh_channel_request_exec)) request_exec{MOCK(ssh_channel_request_exec)};
-    decltype(MOCK(ssh_channel_is_closed)) channel_is_closed{MOCK(ssh_channel_is_closed)};
-    mp::SSHSession session{"theanswertoeverything", 42};
+    const mpt::StubSSHKeyProvider key_provider;
+    mpt::MockSSHTestFixture mock_ssh_test_fixture;
+    mp::SSHSession session{"theanswertoeverything", 42, "ubuntu", key_provider};
 };
 } // namespace
 

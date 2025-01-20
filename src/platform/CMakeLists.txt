@@ -1,4 +1,4 @@
-# Copyright © 2017-2022 Canonical Ltd.
+# Copyright (C) Canonical, Ltd.
 #
 # This program is free software: you can redistribute it and/or modify
 # it under the terms of the GNU General Public License version 3 as
@@ -17,11 +17,10 @@ function(add_target TARGET_NAME)
   if(LINUX)
     add_library(${TARGET_NAME} STATIC
       platform_linux.cpp
-      platform_shared.cpp
       platform_unix.cpp)
 
     target_link_libraries(${TARGET_NAME}
-      journaldlogger)
+      logger_linux)
   endif()
 
   foreach(BACKEND IN LISTS MULTIPASS_BACKENDS)
@@ -38,9 +37,12 @@ function(add_target TARGET_NAME)
 
   target_link_libraries(${TARGET_NAME}
     daemon
+    settings
     shared
     update)
 endfunction()
+
+set(MULTIPASS_ENABLE_SYSLOG FALSE CACHE BOOL "Use syslog for logging instead of journald")
 
 add_target(platform)
 if(MULTIPASS_ENABLE_TESTS)
@@ -52,3 +54,7 @@ add_subdirectory(client)
 add_subdirectory(console)
 add_subdirectory(logger)
 add_subdirectory(update)
+
+if (JOURNALD_FOUND AND NOT MULTIPASS_ENABLE_SYSLOG)
+  add_definitions(-DMULTIPASS_JOURNALD_ENABLED)
+endif()

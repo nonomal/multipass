@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2018-2022 Canonical, Ltd.
+ * Copyright (C) Canonical, Ltd.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -16,9 +16,12 @@
  */
 
 #include "common.h"
-#include "mock_ssh.h"
+#include "disabling_macros.h"
+#include "fake_key_data.h"
 #include "mock_ssh_client.h"
+#include "mock_ssh_test_fixture.h"
 #include "stub_console.h"
+#include "stub_ssh_key_provider.h"
 
 #include <multipass/ssh/ssh_client.h>
 #include <multipass/ssh/ssh_session.h>
@@ -30,23 +33,66 @@ namespace
 {
 struct SSHClient : public testing::Test
 {
-    SSHClient()
-    {
-        connect.returnValue(SSH_OK);
-        is_connected.returnValue(true);
-        open_session.returnValue(SSH_OK);
-    }
-
     mp::SSHClient make_ssh_client()
     {
-        auto console_creator = [](auto /*channel*/) { return std::make_unique<mpt::StubConsole>(); };
-        return {std::make_unique<mp::SSHSession>("a", 42), console_creator};
+        return {std::make_unique<mp::SSHSession>("a", 42, "ubuntu", key_provider), console_creator};
     }
 
-    decltype(MOCK(ssh_connect)) connect{MOCK(ssh_connect)};
-    decltype(MOCK(ssh_is_connected)) is_connected{MOCK(ssh_is_connected)};
-    decltype(MOCK(ssh_channel_open_session)) open_session{MOCK(ssh_channel_open_session)};
+    const mpt::StubSSHKeyProvider key_provider;
+    mpt::MockSSHTestFixture mock_ssh_test_fixture;
+    mp::SSHClient::ConsoleCreator console_creator = [](auto /*channel*/) {
+        return std::make_unique<mpt::StubConsole>();
+    };
 };
+}
+
+TEST_F(SSHClient, standardCtorDoesNotThrow)
+{
+    EXPECT_NO_THROW(mp::SSHClient("a", 42, "foo", mpt::fake_key_data, console_creator));
+}
+
+TEST_F(SSHClient, execSingleCommandReturnsOKNoFailure)
+{
+    auto client = make_ssh_client();
+
+    EXPECT_EQ(client.exec({"foo"}), SSH_OK);
+}
+
+TEST_F(SSHClient, execMultipleCommandsReturnsOKNoFailure)
+{
+    auto client = make_ssh_client();
+
+    std::vector<std::vector<std::string>> commands{{"ls", "-la"}, {"pwd"}};
+    EXPECT_EQ(client.exec(commands), SSH_OK);
+}
+
+TEST_F(SSHClient, execReturnsErrorCodeOnFailure)
+{
+    const int failure_code{127};
+    auto client = make_ssh_client();
+
+    REPLACE(ssh_channel_get_exit_status, [&failure_code](auto) { return failure_code; });
+
+    EXPECT_EQ(client.exec({"foo"}), failure_code);
+}
+
+TEST_F(SSHClient, DISABLE_ON_WINDOWS(execPollingWorksAsExpected))
+{
+    int poll_count{0};
+    auto client = make_ssh_client();
+
+    mock_ssh_test_fixture.is_eof.returnValue(0);
+
+    auto event_dopoll = [this, &poll_count](auto...) {
+        ++poll_count;
+        mock_ssh_test_fixture.is_eof.returnValue(true);
+        return SSH_OK;
+    };
+
+    REPLACE(ssh_event_dopoll, event_dopoll);
+
+    EXPECT_EQ(client.exec({"foo"}), SSH_OK);
+    EXPECT_EQ(poll_count, 1);
 }
 
 TEST_F(SSHClient, throws_when_unable_to_open_session)

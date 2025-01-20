@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2017-2022 Canonical, Ltd.
+ * Copyright (C) Canonical, Ltd.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -34,17 +34,39 @@ public:
     explicit QemuVirtualMachineFactory(const Path& data_dir);
 
     VirtualMachine::UPtr create_virtual_machine(const VirtualMachineDescription& desc,
+                                                const SSHKeyProvider& key_provider,
                                                 VMStatusMonitor& monitor) override;
-    void remove_resources_for(const std::string& name) override;
     VMImage prepare_source_image(const VMImage& source_image) override;
     void prepare_instance_image(const VMImage& instance_image, const VirtualMachineDescription& desc) override;
     void hypervisor_health_check() override;
-    QString get_backend_version_string() override;
-    QString get_backend_directory_name() override;
+    QString get_backend_version_string() const override;
+    QString get_backend_directory_name() const override;
+    std::vector<NetworkInterfaceInfo> networks() const override;
+    void require_snapshots_support() const override;
+    void require_clone_support() const override;
+    void prepare_networking(std::vector<NetworkInterface>& extra_interfaces) override;
+
+protected:
+    void remove_resources_for_impl(const std::string& name) override;
+    std::string create_bridge_with(const NetworkInterfaceInfo& interface) override;
 
 private:
+    QemuVirtualMachineFactory(QemuPlatform::UPtr qemu_platform, const Path& data_dir);
+    VirtualMachine::UPtr clone_vm_impl(const std::string& source_vm_name,
+                                       const multipass::VMSpecs& src_vm_specs,
+                                       const VirtualMachineDescription& desc,
+                                       VMStatusMonitor& monitor,
+                                       const SSHKeyProvider& key_provider) override;
+
     QemuPlatform::UPtr qemu_platform;
 };
 } // namespace multipass
 
+inline void multipass::QemuVirtualMachineFactory::require_snapshots_support() const
+{
+}
+
+inline void multipass::QemuVirtualMachineFactory::require_clone_support() const
+{
+}
 #endif // MULTIPASS_QEMU_VIRTUAL_MACHINE_FACTORY_H

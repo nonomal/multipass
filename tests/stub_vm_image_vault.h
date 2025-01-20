@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2017-2022 Canonical, Ltd.
+ * Copyright (C) Canonical, Ltd.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -28,10 +28,15 @@ namespace test
 {
 struct StubVMImageVault final : public multipass::VMImageVault
 {
-    multipass::VMImage fetch_image(const multipass::FetchType&, const multipass::Query&, const PrepareAction& prepare,
-                                   const multipass::ProgressMonitor&) override
+    multipass::VMImage fetch_image(const multipass::FetchType&,
+                                   const multipass::Query&,
+                                   const PrepareAction& prepare,
+                                   const multipass::ProgressMonitor&,
+                                   const bool,
+                                   const std::optional<std::string>&,
+                                   const multipass::Path&) override
     {
-        return prepare({dummy_image.name(), dummy_image.name(), dummy_image.name(), {}, {}, {}, {}, {}});
+        return prepare({dummy_image.name(), {}, {}, {}, {}, {}});
     };
 
     void remove(const std::string&) override{};
@@ -57,6 +62,10 @@ struct StubVMImageVault final : public multipass::VMImageVault
     std::vector<std::pair<std::string, VMImageInfo>> all_info_for(const Query& query) const override
     {
         return {};
+    }
+
+    void clone(const std::string& source_instance_name, const std::string& destination_instance_name) override
+    {
     }
 
     TempFile dummy_image;

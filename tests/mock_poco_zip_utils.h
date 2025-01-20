@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2021-2022 Canonical, Ltd.
+ * Copyright (C) Canonical, Ltd.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -30,7 +30,7 @@ class MockPocoZipUtils : public PocoZipUtils
 public:
     using PocoZipUtils::PocoZipUtils;
 
-    MOCK_CONST_METHOD1(zip_archive_for, Poco::Zip::ZipArchive(std::ifstream&));
+    MOCK_METHOD(Poco::Zip::ZipArchive, zip_archive_for, (std::ifstream&), (const, override));
 
     MP_MOCK_SINGLETON_BOILERPLATE(MockPocoZipUtils, PocoZipUtils);
 };

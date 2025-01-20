@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2017-2022 Canonical, Ltd.
+ * Copyright (C) Canonical, Ltd.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -22,7 +22,7 @@
 #include <multipass/cli/argparser.h>
 #include <multipass/constants.h>
 #include <multipass/exceptions/cmd_exceptions.h>
-#include <multipass/settings.h>
+#include <multipass/settings/settings.h>
 #include <multipass/ssh/ssh_client.h>
 #include <multipass/timer.h>
 
@@ -31,7 +31,6 @@
 
 namespace mp = multipass;
 namespace cmd = multipass::cmd;
-using RpcMethod = mp::Rpc::Stub;
 
 mp::ReturnCode cmd::Shell::run(mp::ArgParser* parser)
 {
@@ -46,7 +45,9 @@ mp::ReturnCode cmd::Shell::run(mp::ArgParser* parser)
 
     if (parser->isSet("timeout"))
     {
-        timer = cmd::make_timer(parser->value("timeout").toInt(), nullptr, cerr,
+        timer = cmd::make_timer(parser->value("timeout").toInt(),
+                                nullptr,
+                                cerr,
                                 "Timed out waiting for instance to start.");
         timer->start();
     }
@@ -63,7 +64,7 @@ mp::ReturnCode cmd::Shell::run(mp::ArgParser* parser)
         if (reply.ssh_info().empty())
             return ReturnCode::Ok;
 
-        // TODO: this should setup a reader that continously prints out
+        // TODO: this should setup a reader that continuously prints out
         // streaming replies from the server corresponding to stdout/stderr streams
         const auto& ssh_info = reply.ssh_info().begin()->second;
         const auto& host = ssh_info.host();
@@ -73,7 +74,7 @@ mp::ReturnCode cmd::Shell::run(mp::ArgParser* parser)
 
         try
         {
-            auto console_creator = [this](auto channel) { return Console::make_console(channel, term); };
+            auto console_creator = [this](auto channel) { return term->make_console(channel); };
             mp::SSHClient ssh_client{host, port, username, priv_key_blob, console_creator};
             ssh_client.connect();
         }
@@ -109,7 +110,10 @@ mp::ReturnCode cmd::Shell::run(mp::ArgParser* parser)
     return return_code;
 }
 
-std::string cmd::Shell::name() const { return "shell"; }
+std::string cmd::Shell::name() const
+{
+    return "shell";
+}
 
 std::vector<std::string> cmd::Shell::aliases() const
 {
@@ -118,12 +122,13 @@ std::vector<std::string> cmd::Shell::aliases() const
 
 QString cmd::Shell::short_help() const
 {
-    return QStringLiteral("Open a shell on a running instance");
+    return QStringLiteral("Open a shell on an instance");
 }
 
 QString cmd::Shell::description() const
 {
-    return QStringLiteral("Open a shell prompt on the instance.");
+    return QStringLiteral(
+        "Open a shell prompt on the instance. If the instance is not running, it will be started automatically.");
 }
 
 mp::ParseCode cmd::Shell::parse_args(mp::ArgParser* parser)
